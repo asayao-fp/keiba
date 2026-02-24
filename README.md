@@ -72,12 +72,24 @@ python scripts/jv_ingest_raw.py --from-date 20240101000000 --dataspec RACE --dat
 
 ## 正規化テーブル生成スクリプト
 
-`raw_jv_records` テーブルに取り込んだ RACE DataSpec のレコードを固定長パースして、正規化テーブル (`races` / `entries`) を生成します。
+`raw_jv_records` テーブルに取り込んだレコードを固定長パースして、正規化テーブル (`races` / `entries` / `jockeys` / `trainers`) を生成します。
 
-### 実行方法
+> **斤量と馬体重の違い**
+> - **斤量** (負担重量): 騎手・鞍・装備を含む負担重量 (kg)。レース条件として定義される。
+> - **馬体重**: 出走馬自身の体重 (kg)。SE レコード (馬毎レース情報) から取得。
+>
+> 現状 `entries.body_weight` には SE レコード由来の **馬体重** が格納されます。
+
+### 実行手順
 
 ```bat
-rem raw ingest 後に実行する
+rem 1. raw ingest (RACE DataSpec + マスタ DataSpec)
+python scripts/jv_ingest_raw.py --from-date 20240101 --dataspec RACE,MING
+
+rem 2. マスタテーブル生成 (jockeys 等)
+python scripts/build_masters_from_raw.py --db jv_data.db
+
+rem 3. レース・出走テーブル生成
 python scripts/build_tables_from_raw.py --db jv_data.db
 
 rem 重賞レース (grade_code が空白以外) のみを出力テーブルに残す場合
@@ -85,6 +97,14 @@ python scripts/build_tables_from_raw.py --db jv_data.db --graded-only
 ```
 
 ### オプション
+
+#### `build_masters_from_raw.py`
+
+| オプション | 説明                                                              |
+|----------|-------------------------------------------------------------------|
+| `--db`   | SQLite DB ファイルパス (デフォルト: `jv_data.db`)                  |
+
+#### `build_tables_from_raw.py`
 
 | オプション       | 説明                                                                 |
 |----------------|----------------------------------------------------------------------|
@@ -109,14 +129,33 @@ python scripts/build_tables_from_raw.py --db jv_data.db --graded-only
 
 #### `entries` テーブル
 
-| カラム      | 型      | 説明                                        |
-|-----------|---------|---------------------------------------------|
-| entry_key | TEXT    | 主キー (`race_key` + `horse_no`)             |
-| race_key  | TEXT    | レースキー (`races.race_key` 参照)           |
-| horse_no  | TEXT    | 馬番 (2桁)                                  |
-| horse_id  | TEXT    | 血統登録番号 (10桁)                          |
-| finish_pos| INTEGER | 確定着順 (欠場・非完走等は NULL)              |
-| is_place  | INTEGER | 3着以内なら 1、4着以下なら 0、NULL=着順不明  |
+| カラム       | 型      | 説明                                        |
+|------------|---------|---------------------------------------------|
+| entry_key  | TEXT    | 主キー (`race_key` + `horse_no`)             |
+| race_key   | TEXT    | レースキー (`races.race_key` 参照)           |
+| horse_no   | TEXT    | 馬番 (2桁)                                  |
+| horse_id   | TEXT    | 血統登録番号 (10桁)                          |
+| finish_pos | INTEGER | 確定着順 (欠場・非完走等は NULL)              |
+| is_place   | INTEGER | 3着以内なら 1、4着以下なら 0、NULL=着順不明  |
+| jockey_code| TEXT    | 騎手コード (5桁, SE レコード由来)            |
+| trainer_code| TEXT   | 調教師コード (5桁, SE レコード由来)          |
+| body_weight| INTEGER | 馬体重 (kg, 取得不可の場合は NULL)           |
+
+#### `jockeys` テーブル
+
+| カラム       | 型      | 説明                                        |
+|------------|---------|---------------------------------------------|
+| jockey_code| TEXT    | 主キー (5桁)                                |
+| jockey_name| TEXT    | 騎手名 (全角, 姓+空白+名。外国人は連続)      |
+| updated_at | TEXT    | レコード更新日時 (ISO 8601)                  |
+
+#### `trainers` テーブル
+
+| カラム        | 型      | 説明                                        |
+|-------------|---------|---------------------------------------------|
+| trainer_code| TEXT    | 主キー (5桁)                                |
+| trainer_name| TEXT    | 調教師名 (NULL 可)                           |
+| updated_at  | TEXT    | レコード更新日時 (ISO 8601)                  |
 
 ### 簡易検証 (件数集計)
 
@@ -127,9 +166,15 @@ sqlite3 jv_data.db "SELECT COUNT(*) FROM races;"
 rem entries テーブルの件数
 sqlite3 jv_data.db "SELECT COUNT(*) FROM entries;"
 
+rem jockeys テーブルの件数
+sqlite3 jv_data.db "SELECT COUNT(*) FROM jockeys;"
+
 rem 重賞レースのみ集計
 sqlite3 jv_data.db "SELECT COUNT(*) FROM races WHERE TRIM(grade_code) != '';"
 
 rem 3着以内入着の出走数
 sqlite3 jv_data.db "SELECT COUNT(*) FROM entries WHERE is_place = 1;"
+
+rem 馬体重が記録された出走数
+sqlite3 jv_data.db "SELECT COUNT(*) FROM entries WHERE body_weight IS NOT NULL;"
 ```
