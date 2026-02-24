@@ -1,0 +1,313 @@
+"""
+jv_ingest_raw.py
+================
+JV-Link (COM: JVDTLab.JVLink) から過去データを取得し、SQLite に生レコードとして保存する。
+
+使用環境:
+  - Windows
+  - Python 32bit
+  - pywin32 インストール済み
+  - JV-Link COM コンポーネント (JVDTLab.JVLink) 登録済み
+
+実行例:
+  python scripts/jv_ingest_raw.py --from-date 20240101 --dataspec RACE
+  python scripts/jv_ingest_raw.py --from-date 20240101 --dataspec RACE,TOKU --data-option 1
+"""
+
+import argparse
+import datetime
+import sqlite3
+import sys
+import time
+
+# pywin32 は Windows 専用。インポートに失敗した場合は分かりやすいメッセージを表示する。
+try:
+    import win32com.client
+except ImportError:
+    print(
+        "[ERROR] pywin32 が見つかりません。\n"
+        "  pip install pywin32\n"
+        "  (Python 32bit 環境で実行してください)"
+    )
+    sys.exit(1)
+
+# デフォルト DB パス
+DEFAULT_DB_PATH = "jv_data.db"
+
+# JVOpen DataOption 定数
+DATA_OPTION_NORMAL = 1
+DATA_OPTION_THIS_WEEK = 2
+DATA_OPTION_SETUP = 3
+
+# JVRead / JVGets 戻り値
+RC_EOF = 0
+RC_FILE_CHANGED = -1
+
+# JVOpen 戻り値
+RC_JVOPEN_OK = 0
+
+# JVStatus ポーリング間隔(秒)
+JVSTATUS_POLL_INTERVAL = 0.5
+
+# JVRead バッファサイズ(bytes)
+BUFF_SIZE = 110000
+
+
+def init_db(db_path: str) -> sqlite3.Connection:
+    """SQLite DB を初期化し、raw_jv_records テーブルを作成する。"""
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS raw_jv_records (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            dataspec     TEXT    NOT NULL,
+            buffname     TEXT    NOT NULL,
+            payload_text TEXT    NOT NULL,
+            payload_size INTEGER NOT NULL,
+            fetched_at   TEXT    NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    return conn
+
+
+def jv_open(jvlink, dataspec: str, from_date: str, data_option: int):
+    """
+    JVOpen を呼び出す。
+
+    Returns:
+        (rc, read_count, download_count, last_file_timestamp)
+    """
+    read_count = 0
+    download_count = 0
+    last_file_timestamp = ""
+
+    rc = jvlink.JVOpen(
+        dataspec,
+        from_date,
+        data_option,
+        read_count,
+        download_count,
+        last_file_timestamp,
+    )
+    # JVOpen は OUT パラメータを返さない場合があるため、
+    # pywin32 の戻り値は (rc, read_count, download_count, last_file_timestamp) のタプルになることがある。
+    if isinstance(rc, (tuple, list)):
+        rc, read_count, download_count, last_file_timestamp = rc
+    return rc, read_count, download_count, last_file_timestamp
+
+
+def wait_for_download(jvlink, download_count: int):
+    """
+    ダウンロード完了まで JVStatus をポーリングする。
+
+    Returns:
+        True on success, False on error.
+    """
+    while True:
+        status = jvlink.JVStatus()
+        if status < 0:
+            print(f"[ERROR] JVStatus エラー: {status}")
+            return False
+        print(f"  ダウンロード中 ... {status}/{download_count}", end="\r")
+        if status >= download_count:
+            print(f"  ダウンロード完了: {status}/{download_count}    ")
+            return True
+        time.sleep(JVSTATUS_POLL_INTERVAL)
+
+
+def read_and_store(jvlink, dataspec: str, conn: sqlite3.Connection) -> int:
+    """
+    JVRead ループでデータを読み出し、SQLite に保存する。
+
+    Returns:
+        保存したレコード数。
+    """
+    saved = 0
+    current_buffname = ""
+    fetched_at = datetime.datetime.now().isoformat()
+
+    while True:
+        # JVRead(Buff, BuffSize, BuffName) の呼び出し
+        # pywin32 では OUT パラメータは戻り値のタプルに含まれる場合がある。
+        result = jvlink.JVRead("", BUFF_SIZE, "")
+        if isinstance(result, (tuple, list)):
+            rc = result[0]
+            buff = result[1] if len(result) > 1 else ""
+            buffname = result[2] if len(result) > 2 else current_buffname
+        else:
+            # 旧い pywin32 バインディングでは rc だけ返る場合もある
+            rc = result
+            buff = ""
+            buffname = current_buffname
+
+        if rc == RC_EOF:
+            print(f"  [INFO] JVRead: EOF (全レコード読み込み完了)")
+            break
+        elif rc == RC_FILE_CHANGED:
+            # ファイル切り替わり通知
+            current_buffname = buffname
+            print(f"  [INFO] JVRead: ファイル切り替え -> {buffname}")
+            continue
+        elif rc < RC_FILE_CHANGED:
+            print(f"  [ERROR] JVRead エラー: {rc}")
+            break
+        else:
+            # rc > 0: 正常読み込み (rc はレコードサイズ)
+            if isinstance(buff, bytes):
+                buff = buff.decode("cp932", errors="replace")
+            elif not isinstance(buff, str):
+                print(f"  [WARN] JVRead: 予期しない型 {type(buff)} のデータをスキップします")
+                continue
+            payload_size = rc
+            conn.execute(
+                "INSERT INTO raw_jv_records (dataspec, buffname, payload_text, payload_size, fetched_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (dataspec, current_buffname, buff, payload_size, fetched_at),
+            )
+            saved += 1
+            if saved % 1000 == 0:
+                conn.commit()
+                print(f"  ... {saved} レコード保存済み", end="\r")
+
+    conn.commit()
+    return saved
+
+
+def ingest(
+    dataspecs: list,
+    from_date: str,
+    data_option: int,
+    db_path: str,
+    sid: str,
+) -> None:
+    """メイン処理: JV-Link から取得して SQLite に保存する。"""
+    conn = init_db(db_path)
+
+    jvlink = win32com.client.Dispatch("JVDTLab.JVLink")
+
+    # JVInit
+    rc = jvlink.JVInit(sid)
+    if rc != 0:
+        print(f"[ERROR] JVInit エラー: {rc}")
+        conn.close()
+        return
+    print(f"[INFO] JVInit 成功")
+
+    for dataspec in dataspecs:
+        dataspec = dataspec.strip()
+        if not dataspec:
+            continue
+        print(f"\n[INFO] DataSpec={dataspec} の取得を開始します ...")
+
+        rc, read_count, download_count, last_ts = jv_open(
+            jvlink, dataspec, from_date, data_option
+        )
+
+        if rc != RC_JVOPEN_OK:
+            print(f"[ERROR] JVOpen エラー (DataSpec={dataspec}): {rc}")
+            jvlink.JVClose()
+            continue
+
+        print(
+            f"[INFO] JVOpen 成功: ReadCount={read_count}, DownloadCount={download_count}, "
+            f"LastFileTimeStamp={last_ts}"
+        )
+
+        if download_count > 0:
+            ok = wait_for_download(jvlink, download_count)
+            if not ok:
+                jvlink.JVClose()
+                continue
+
+        saved = read_and_store(jvlink, dataspec, conn)
+        print(f"[INFO] DataSpec={dataspec}: {saved} レコードを保存しました")
+
+        rc_close = jvlink.JVClose()
+        if rc_close != 0:
+            print(f"[WARN] JVClose エラー: {rc_close}")
+        else:
+            print(f"[INFO] JVClose 成功")
+
+    conn.close()
+    print(f"\n[INFO] 完了。DB: {db_path}")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="JV-Link から過去データを取得して SQLite に保存する"
+    )
+    parser.add_argument(
+        "--from-date",
+        required=True,
+        metavar="YYYYMMDD[000000]",
+        help="データ提供開始日時 (例: 20240101 または 20240101000000)",
+    )
+    parser.add_argument(
+        "--dataspec",
+        required=True,
+        metavar="DATASPEC[,DATASPEC...]",
+        help="DataSpec をカンマ区切りで指定 (例: RACE または RACE,TOKU)",
+    )
+    parser.add_argument(
+        "--data-option",
+        type=int,
+        default=DATA_OPTION_NORMAL,
+        choices=[DATA_OPTION_NORMAL, DATA_OPTION_THIS_WEEK, DATA_OPTION_SETUP],
+        help="DataOption: 1=通常データ, 2=今週データ, 3=セットアップデータ (デフォルト: 1)",
+    )
+    parser.add_argument(
+        "--db",
+        default=DEFAULT_DB_PATH,
+        metavar="PATH",
+        help=f"SQLite DB ファイルパス (デフォルト: {DEFAULT_DB_PATH})",
+    )
+    parser.add_argument(
+        "--sid",
+        default="",
+        metavar="SID",
+        help="JVInit に渡すサービスID (通常は空文字列)",
+    )
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    from_date = args.from_date
+    # 14桁に正規化 (yyyymmdd -> yyyymmdd000000)
+    if len(from_date) == 8:
+        from_date = from_date + "000000"
+    elif len(from_date) != 14:
+        print(f"[ERROR] --from-date は YYYYMMDD または YYYYMMDD000000 形式で指定してください: {args.from_date}")
+        sys.exit(1)
+    # 日付の妥当性チェック
+    try:
+        datetime.datetime.strptime(from_date[:8], "%Y%m%d")
+    except ValueError:
+        print(f"[ERROR] --from-date に無効な日付が含まれています: {args.from_date}")
+        sys.exit(1)
+
+    dataspecs = [s.strip() for s in args.dataspec.split(",") if s.strip()]
+    if not dataspecs:
+        print("[ERROR] --dataspec に有効な値を指定してください")
+        sys.exit(1)
+
+    print(f"[INFO] 取得設定:")
+    print(f"  DataSpec    : {', '.join(dataspecs)}")
+    print(f"  FromDate    : {from_date}")
+    print(f"  DataOption  : {args.data_option}")
+    print(f"  DB          : {args.db}")
+
+    ingest(
+        dataspecs=dataspecs,
+        from_date=from_date,
+        data_option=args.data_option,
+        db_path=args.db,
+        sid=args.sid,
+    )
+
+
+if __name__ == "__main__":
+    main()
