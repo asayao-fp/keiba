@@ -67,3 +67,69 @@ python scripts/jv_ingest_raw.py --from-date 20240101000000 --dataspec RACE --dat
 | fetched_at    | TEXT    | 取得日時 (ISO 8601)           |
 
 スキーマ定義: `db/schema.sql`
+
+---
+
+## 正規化テーブル生成スクリプト
+
+`raw_jv_records` テーブルに取り込んだ RACE DataSpec のレコードを固定長パースして、正規化テーブル (`races` / `entries`) を生成します。
+
+### 実行方法
+
+```bat
+rem raw ingest 後に実行する
+python scripts/build_tables_from_raw.py --db jv_data.db
+
+rem 重賞レース (grade_code が空白以外) のみを出力テーブルに残す場合
+python scripts/build_tables_from_raw.py --db jv_data.db --graded-only
+```
+
+### オプション
+
+| オプション       | 説明                                                                 |
+|----------------|----------------------------------------------------------------------|
+| `--db`         | SQLite DB ファイルパス (デフォルト: `jv_data.db`)                     |
+| `--graded-only`| 重賞レース (grade_code が空白以外) のレース・出走のみを出力テーブルに残す |
+
+### 出力テーブル
+
+#### `races` テーブル
+
+| カラム           | 型      | 説明                                       |
+|----------------|---------|--------------------------------------------|
+| race_key       | TEXT    | 主キー (`yyyymmddcoursekaidayraceno`)       |
+| yyyymmdd       | TEXT    | 開催年月日 (8桁)                            |
+| course_code    | TEXT    | 競馬場コード (2桁)                          |
+| kai            | TEXT    | 開催回 (2桁)                               |
+| day            | TEXT    | 開催日目 (2桁)                             |
+| race_no        | TEXT    | レース番号 (2桁)                           |
+| grade_code     | TEXT    | グレードコード (空白=平場, A/B/C等=重賞)    |
+| race_name_short| TEXT    | 競走名略称 (全角3文字)                      |
+| created_at     | TEXT    | レコード生成日時 (ISO 8601)                 |
+
+#### `entries` テーブル
+
+| カラム      | 型      | 説明                                        |
+|-----------|---------|---------------------------------------------|
+| entry_key | TEXT    | 主キー (`race_key` + `horse_no`)             |
+| race_key  | TEXT    | レースキー (`races.race_key` 参照)           |
+| horse_no  | TEXT    | 馬番 (2桁)                                  |
+| horse_id  | TEXT    | 血統登録番号 (10桁)                          |
+| finish_pos| INTEGER | 確定着順 (欠場・非完走等は NULL)              |
+| is_place  | INTEGER | 3着以内なら 1、4着以下なら 0、NULL=着順不明  |
+
+### 簡易検証 (件数集計)
+
+```bat
+rem races テーブルの件数
+sqlite3 jv_data.db "SELECT COUNT(*) FROM races;"
+
+rem entries テーブルの件数
+sqlite3 jv_data.db "SELECT COUNT(*) FROM entries;"
+
+rem 重賞レースのみ集計
+sqlite3 jv_data.db "SELECT COUNT(*) FROM races WHERE TRIM(grade_code) != '';"
+
+rem 3着以内入着の出走数
+sqlite3 jv_data.db "SELECT COUNT(*) FROM entries WHERE is_place = 1;"
+```
