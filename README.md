@@ -117,6 +117,7 @@ python scripts/build_tables_from_raw.py --db jv_data.db --graded-only
 | horse_id  | TEXT    | 血統登録番号 (10桁)                          |
 | finish_pos| INTEGER | 確定着順 (欠場・非完走等は NULL)              |
 | is_place  | INTEGER | 3着以内なら 1、4着以下なら 0、NULL=着順不明  |
+| handicap_weight_x10 | INTEGER | 負担重量(斤量)。単位 0.1kg (例: 550 = 55.0kg)。数値変換不可の場合 NULL |
 
 ### 簡易検証 (件数集計)
 

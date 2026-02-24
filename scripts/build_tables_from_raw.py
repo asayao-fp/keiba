@@ -70,6 +70,7 @@ def parse_se(payload: str):
     raceno = _s(payload, 26, 2)
     horse_no  = _s(payload, 29, 2)
     horse_id  = _s(payload, 31, 10)
+    handicap_raw = _s(payload, 289, 3).strip()
     finish_raw = _s(payload, 335, 2).strip()
 
     race_key  = f"{yyyy}{mmdd}{course}{kai}{day}{raceno}"
@@ -84,13 +85,19 @@ def parse_se(payload: str):
             finish_pos = fp
             is_place   = 1 if fp <= 3 else 0
 
+    # 負担重量(斤量): 数値変換できない場合は NULL
+    handicap_weight_x10 = None
+    if handicap_raw and handicap_raw.isdigit():
+        handicap_weight_x10 = int(handicap_raw)
+
     return {
-        "entry_key":  entry_key,
-        "race_key":   race_key,
-        "horse_no":   horse_no,
-        "horse_id":   horse_id,
-        "finish_pos": finish_pos,
-        "is_place":   is_place,
+        "entry_key":           entry_key,
+        "race_key":            race_key,
+        "horse_no":            horse_no,
+        "horse_id":            horse_id,
+        "finish_pos":          finish_pos,
+        "is_place":            is_place,
+        "handicap_weight_x10": handicap_weight_x10,
     }
 
 
@@ -110,16 +117,22 @@ def init_normalized_tables(conn: sqlite3.Connection) -> None:
         );
 
         CREATE TABLE IF NOT EXISTS entries (
-            entry_key   TEXT    PRIMARY KEY,
-            race_key    TEXT    NOT NULL REFERENCES races(race_key),
-            horse_no    TEXT    NOT NULL,
-            horse_id    TEXT    NOT NULL,
-            finish_pos  INTEGER,
-            is_place    INTEGER,
+            entry_key            TEXT    PRIMARY KEY,
+            race_key             TEXT    NOT NULL REFERENCES races(race_key),
+            horse_no             TEXT    NOT NULL,
+            horse_id             TEXT    NOT NULL,
+            finish_pos           INTEGER,
+            is_place             INTEGER,
+            handicap_weight_x10  INTEGER,
             UNIQUE (race_key, horse_no)
         );
         """
     )
+    # 既存 DB に列がない場合に追加 (冪等)
+    # PRAGMA table_info の各行は (cid, name, type, notnull, dflt_value, pk)
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(entries)")}
+    if "handicap_weight_x10" not in existing:
+        conn.execute("ALTER TABLE entries ADD COLUMN handicap_weight_x10 INTEGER")
     conn.commit()
 
 
@@ -182,14 +195,16 @@ def build_tables(db_path: str, graded_only: bool) -> None:
             conn.execute(
                 """
                 INSERT INTO entries
-                    (entry_key, race_key, horse_no, horse_id, finish_pos, is_place)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (entry_key, race_key, horse_no, horse_id, finish_pos, is_place,
+                     handicap_weight_x10)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(entry_key) DO UPDATE SET
-                    race_key   = excluded.race_key,
-                    horse_no   = excluded.horse_no,
-                    horse_id   = excluded.horse_id,
-                    finish_pos = excluded.finish_pos,
-                    is_place   = excluded.is_place
+                    race_key             = excluded.race_key,
+                    horse_no             = excluded.horse_no,
+                    horse_id             = excluded.horse_id,
+                    finish_pos           = excluded.finish_pos,
+                    is_place             = excluded.is_place,
+                    handicap_weight_x10  = excluded.handicap_weight_x10
                 """,
                 (
                     rec["entry_key"],
@@ -198,6 +213,7 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                     rec["horse_id"],
                     rec["finish_pos"],
                     rec["is_place"],
+                    rec["handicap_weight_x10"],
                 ),
             )
             se_count += 1
