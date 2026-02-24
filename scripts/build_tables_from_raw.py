@@ -17,9 +17,9 @@ import sqlite3
 DEFAULT_DB_PATH = "jv_data.db"
 
 
-def _s(text: str, pos: int, length: int) -> str:
-    """1始まり pos から length 文字を切り出す (0始まりに変換)。"""
-    return text[pos - 1 : pos - 1 + length]
+def _sb(b: bytes, pos: int, length: int) -> str:
+    """cp932 バイト列上で 1始まり pos から length バイトを切り出して文字列へ変換する。"""
+    return b[pos - 1 : pos - 1 + length].decode("cp932", errors="ignore")
 
 
 def parse_ra(payload: str):
@@ -27,17 +27,18 @@ def parse_ra(payload: str):
     RA レコード (レース詳細, 1272 byte) をパースして dict を返す。
     レコード種別識別子が 'RA' でない場合は None を返す。
     """
-    if len(payload) < 615 or payload[:2] != "RA":
+    b = payload.encode("cp932")
+    if len(b) < 615 or payload[:2] != "RA":
         return None
 
-    yyyy        = _s(payload, 12, 4)
-    mmdd        = _s(payload, 16, 4)
-    course      = _s(payload, 20, 2)
-    kai         = _s(payload, 22, 2)
-    day         = _s(payload, 24, 2)
-    raceno      = _s(payload, 26, 2)
-    race_name_short = _s(payload, 605, 6)
-    grade_code  = _s(payload, 615, 1)
+    yyyy        = _sb(b, 12, 4)
+    mmdd        = _sb(b, 16, 4)
+    course      = _sb(b, 20, 2)
+    kai         = _sb(b, 22, 2)
+    day         = _sb(b, 24, 2)
+    raceno      = _sb(b, 26, 2)
+    race_name_short = _sb(b, 605, 6)
+    grade_code  = _sb(b, 615, 1)
 
     race_key = f"{yyyy}{mmdd}{course}{kai}{day}{raceno}"
     yyyymmdd = f"{yyyy}{mmdd}"
@@ -59,21 +60,23 @@ def parse_se(payload: str):
     SE レコード (馬毎レース情報, 555 byte) をパースして dict を返す。
     レコード種別識別子が 'SE' でない場合は None を返す。
     """
-    if len(payload) < 336 or payload[:2] != "SE":
+    b = payload.encode("cp932")
+    if len(b) < 336 or payload[:2] != "SE":
         return None
 
-    yyyy   = _s(payload, 12, 4)
-    mmdd   = _s(payload, 16, 4)
-    course = _s(payload, 20, 2)
-    kai    = _s(payload, 22, 2)
-    day    = _s(payload, 24, 2)
-    raceno = _s(payload, 26, 2)
-    horse_no  = _s(payload, 29, 2)
-    horse_id  = _s(payload, 31, 10)
-    trainer_code    = _s(payload, 86, 5)
-    jockey_code     = _s(payload, 297, 5)
-    body_weight_raw = _s(payload, 325, 3).strip()
-    finish_raw      = _s(payload, 335, 2).strip()
+    yyyy   = _sb(b, 12, 4)
+    mmdd   = _sb(b, 16, 4)
+    course = _sb(b, 20, 2)
+    kai    = _sb(b, 22, 2)
+    day    = _sb(b, 24, 2)
+    raceno = _sb(b, 26, 2)
+    horse_no  = _sb(b, 29, 2)
+    horse_id  = _sb(b, 31, 10)
+    trainer_code         = _sb(b, 86, 5)
+    handicap_weight_raw  = _sb(b, 289, 3).strip()
+    jockey_code          = _sb(b, 297, 5)
+    body_weight_raw      = _sb(b, 325, 3).strip()
+    finish_raw           = _sb(b, 335, 2).strip()
 
     race_key  = f"{yyyy}{mmdd}{course}{kai}{day}{raceno}"
     entry_key = f"{race_key}{horse_no}"
@@ -97,16 +100,27 @@ def parse_se(payload: str):
         except ValueError:
             pass
 
+    # 負担重量 (斤量) 単位 0.1kg: 数値変換できない場合は NULL
+    handicap_weight_x10 = None
+    if handicap_weight_raw:
+        try:
+            hw = int(handicap_weight_raw)
+            if hw > 0:
+                handicap_weight_x10 = hw
+        except ValueError:
+            pass
+
     return {
-        "entry_key":    entry_key,
-        "race_key":     race_key,
-        "horse_no":     horse_no,
-        "horse_id":     horse_id,
-        "jockey_code":  jockey_code,
-        "trainer_code": trainer_code,
-        "body_weight":  body_weight,
-        "finish_pos":   finish_pos,
-        "is_place":     is_place,
+        "entry_key":           entry_key,
+        "race_key":            race_key,
+        "horse_no":            horse_no,
+        "horse_id":            horse_id,
+        "jockey_code":         jockey_code,
+        "trainer_code":        trainer_code,
+        "body_weight":         body_weight,
+        "handicap_weight_x10": handicap_weight_x10,
+        "finish_pos":          finish_pos,
+        "is_place":            is_place,
     }
 
 
@@ -150,9 +164,10 @@ def init_normalized_tables(conn: sqlite3.Connection) -> None:
     )
     # entries に新規列を追加 (冪等: 既存の場合はスキップ)
     for col_def in [
-        "jockey_code  TEXT",
-        "trainer_code TEXT",
-        "body_weight  INTEGER",
+        "jockey_code         TEXT",
+        "trainer_code        TEXT",
+        "body_weight         INTEGER",
+        "handicap_weight_x10 INTEGER",
     ]:
         try:
             conn.execute(f"ALTER TABLE entries ADD COLUMN {col_def}")
@@ -222,17 +237,18 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                 """
                 INSERT INTO entries
                     (entry_key, race_key, horse_no, horse_id, finish_pos, is_place,
-                     jockey_code, trainer_code, body_weight)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     jockey_code, trainer_code, body_weight, handicap_weight_x10)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(entry_key) DO UPDATE SET
-                    race_key     = excluded.race_key,
-                    horse_no     = excluded.horse_no,
-                    horse_id     = excluded.horse_id,
-                    finish_pos   = excluded.finish_pos,
-                    is_place     = excluded.is_place,
-                    jockey_code  = excluded.jockey_code,
-                    trainer_code = excluded.trainer_code,
-                    body_weight  = excluded.body_weight
+                    race_key             = excluded.race_key,
+                    horse_no             = excluded.horse_no,
+                    horse_id             = excluded.horse_id,
+                    finish_pos           = excluded.finish_pos,
+                    is_place             = excluded.is_place,
+                    jockey_code          = excluded.jockey_code,
+                    trainer_code         = excluded.trainer_code,
+                    body_weight          = excluded.body_weight,
+                    handicap_weight_x10  = excluded.handicap_weight_x10
                 """,
                 (
                     rec["entry_key"],
@@ -244,6 +260,7 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                     rec["jockey_code"],
                     rec["trainer_code"],
                     rec["body_weight"],
+                    rec["handicap_weight_x10"],
                 ),
             )
             se_count += 1

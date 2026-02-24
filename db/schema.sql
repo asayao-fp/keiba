@@ -20,11 +20,15 @@ CREATE TABLE IF NOT EXISTS races (
 );
 
 CREATE TABLE IF NOT EXISTS entries (
-    entry_key   TEXT    PRIMARY KEY,
-    race_key    TEXT    NOT NULL REFERENCES races(race_key),
-    horse_no    TEXT    NOT NULL,
-    horse_id    TEXT    NOT NULL,
-    finish_pos  INTEGER,
-    is_place    INTEGER,
+    entry_key            TEXT    PRIMARY KEY,
+    race_key             TEXT    NOT NULL REFERENCES races(race_key),
+    horse_no             TEXT    NOT NULL,
+    horse_id             TEXT    NOT NULL,
+    finish_pos           INTEGER,
+    is_place             INTEGER,
+    jockey_code          TEXT,
+    trainer_code         TEXT,
+    body_weight          INTEGER,
+    handicap_weight_x10  INTEGER,
     UNIQUE (race_key, horse_no)
 );

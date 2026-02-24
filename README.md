@@ -140,6 +140,7 @@ python scripts/build_tables_from_raw.py --db jv_data.db --graded-only
 | jockey_code| TEXT    | 騎手コード (5桁, SE レコード由来)            |
 | trainer_code| TEXT   | 調教師コード (5桁, SE レコード由来)          |
 | body_weight| INTEGER | 馬体重 (kg, 取得不可の場合は NULL)           |
+| handicap_weight_x10| INTEGER | 斤量=負担重量 (単位 0.1kg, 例: 550=55.0kg, 取得不可の場合は NULL) |
 
 #### `jockeys` テーブル
 
@@ -177,4 +178,13 @@ sqlite3 jv_data.db "SELECT COUNT(*) FROM entries WHERE is_place = 1;"
 
 rem 馬体重が記録された出走数
 sqlite3 jv_data.db "SELECT COUNT(*) FROM entries WHERE body_weight IS NOT NULL;"
+
+rem 斤量 (負担重量) が記録された出走数
+sqlite3 jv_data.db "SELECT COUNT(*) FROM entries WHERE handicap_weight_x10 IS NOT NULL;"
+
+rem 馬体重の min/max/avg
+sqlite3 jv_data.db "SELECT MIN(body_weight), MAX(body_weight), AVG(body_weight) FROM entries WHERE body_weight IS NOT NULL;"
+
+rem 斤量の min/max/avg (単位 0.1kg)
+sqlite3 jv_data.db "SELECT MIN(handicap_weight_x10), MAX(handicap_weight_x10), AVG(handicap_weight_x10) FROM entries WHERE handicap_weight_x10 IS NOT NULL;"
 ```
