@@ -189,6 +189,9 @@ def ingest(
 
     # JVInit
     rc = jvlink.JVInit(sid)
+    if rc == -101 and not sid:
+        print(f"[WARN] JVInit が -101 で失敗しました (SID が空文字)。SID を 'UNKNOWN' にフォールバックして再試行します ...")
+        rc = jvlink.JVInit("UNKNOWN")
     if rc != 0:
         print(f"[ERROR] JVInit エラー: {rc}")
         conn.close()
@@ -207,6 +210,11 @@ def ingest(
 
         if rc != RC_JVOPEN_OK:
             print(f"[ERROR] JVOpen エラー (DataSpec={dataspec}): {rc}")
+            if rc == -1:
+                print(
+                    f"[HINT]  JVOpen -1 の主な原因: 契約・提供対象外の DataSpec / FromDate 形式不正 / "
+                    f"DIFF など差分系は提供範囲外の場合あり"
+                )
             jvlink.JVClose()
             continue
 
@@ -265,9 +273,9 @@ def parse_args():
     )
     parser.add_argument(
         "--sid",
-        default="",
+        default="UNKNOWN",
         metavar="SID",
-        help="JVInit に渡すサービスID (通常は空文字列)",
+        help="JVInit に渡すサービスID (デフォルト: UNKNOWN。空文字で -101 が返る環境では UNKNOWN が必要)",
     )
     return parser.parse_args()
 

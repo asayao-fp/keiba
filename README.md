@@ -39,9 +39,19 @@ python scripts/jv_ingest_raw.py --from-date 20240101000000 --dataspec RACE --dat
 | `--dataspec`    | ✓    | DataSpec をカンマ区切りで指定。例: `RACE` / `RACE,TOKU`               |
 | `--data-option` |      | 1=通常データ (デフォルト), 2=今週データ, 3=セットアップデータ           |
 | `--db`          |      | SQLite DB ファイルパス (デフォルト: `jv_data.db`)                      |
-| `--sid`         |      | JVInit に渡すサービスID (通常は空文字列)                               |
+| `--sid`         |      | JVInit に渡すサービスID (デフォルト: `UNKNOWN`。空文字で -101 が返る環境では `UNKNOWN` が必要) |
 
 利用可能な DataSpec: `TOKU`, `RACE`, `DIFF`, `BLOD`, `SNAP`, `SLOP`, `WOOD`, `YSCH`, `HOSE`, `HOYU`, `COMM`, `MING`
+
+> **注意**: `DIFF` など差分系の DataSpec は、契約プランや提供対象範囲によっては `JVOpen` が `-1` で失敗することがあります。
+> その場合、該当 DataSpec はスキップされ、他の DataSpec の処理は継続されます。
+
+### トラブルシューティング
+
+| 症状 | 対処 |
+|------|------|
+| `JVInit` が `-101` で失敗する | `--sid ""` のように空文字を渡していた場合は引数を省略するか `--sid UNKNOWN` を指定してください (デフォルトは `UNKNOWN`) |
+| `JVOpen` が `-1` で失敗する | 契約・提供対象外の DataSpec の可能性があります。`--dataspec` から該当 DataSpec を除外してください |
 
 ### 保存先 SQLite テーブル
 
