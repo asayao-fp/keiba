@@ -70,7 +70,10 @@ def parse_se(payload: str):
     raceno = _s(payload, 26, 2)
     horse_no  = _s(payload, 29, 2)
     horse_id  = _s(payload, 31, 10)
-    finish_raw = _s(payload, 335, 2).strip()
+    trainer_code    = _s(payload, 86, 5)
+    jockey_code     = _s(payload, 297, 5)
+    body_weight_raw = _s(payload, 325, 3).strip()
+    finish_raw      = _s(payload, 335, 2).strip()
 
     race_key  = f"{yyyy}{mmdd}{course}{kai}{day}{raceno}"
     entry_key = f"{race_key}{horse_no}"
@@ -84,13 +87,26 @@ def parse_se(payload: str):
             finish_pos = fp
             is_place   = 1 if fp <= 3 else 0
 
+    # 馬体重: 数値変換できない場合は NULL
+    body_weight = None
+    if body_weight_raw:
+        try:
+            bw = int(body_weight_raw)
+            if bw > 0:
+                body_weight = bw
+        except ValueError:
+            pass
+
     return {
-        "entry_key":  entry_key,
-        "race_key":   race_key,
-        "horse_no":   horse_no,
-        "horse_id":   horse_id,
-        "finish_pos": finish_pos,
-        "is_place":   is_place,
+        "entry_key":    entry_key,
+        "race_key":     race_key,
+        "horse_no":     horse_no,
+        "horse_id":     horse_id,
+        "jockey_code":  jockey_code,
+        "trainer_code": trainer_code,
+        "body_weight":  body_weight,
+        "finish_pos":   finish_pos,
+        "is_place":     is_place,
     }
 
 
@@ -118,8 +134,31 @@ def init_normalized_tables(conn: sqlite3.Connection) -> None:
             is_place    INTEGER,
             UNIQUE (race_key, horse_no)
         );
+
+        CREATE TABLE IF NOT EXISTS jockeys (
+            jockey_code TEXT PRIMARY KEY,
+            jockey_name TEXT,
+            updated_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS trainers (
+            trainer_code TEXT PRIMARY KEY,
+            trainer_name TEXT,
+            updated_at   TEXT NOT NULL
+        );
         """
     )
+    # entries に新規列を追加 (冪等: 既存の場合はスキップ)
+    for col_def in [
+        "jockey_code  TEXT",
+        "trainer_code TEXT",
+        "body_weight  INTEGER",
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE entries ADD COLUMN {col_def}")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
     conn.commit()
 
 
@@ -182,14 +221,18 @@ def build_tables(db_path: str, graded_only: bool) -> None:
             conn.execute(
                 """
                 INSERT INTO entries
-                    (entry_key, race_key, horse_no, horse_id, finish_pos, is_place)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (entry_key, race_key, horse_no, horse_id, finish_pos, is_place,
+                     jockey_code, trainer_code, body_weight)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(entry_key) DO UPDATE SET
-                    race_key   = excluded.race_key,
-                    horse_no   = excluded.horse_no,
-                    horse_id   = excluded.horse_id,
-                    finish_pos = excluded.finish_pos,
-                    is_place   = excluded.is_place
+                    race_key     = excluded.race_key,
+                    horse_no     = excluded.horse_no,
+                    horse_id     = excluded.horse_id,
+                    finish_pos   = excluded.finish_pos,
+                    is_place     = excluded.is_place,
+                    jockey_code  = excluded.jockey_code,
+                    trainer_code = excluded.trainer_code,
+                    body_weight  = excluded.body_weight
                 """,
                 (
                     rec["entry_key"],
@@ -198,6 +241,9 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                     rec["horse_id"],
                     rec["finish_pos"],
                     rec["is_place"],
+                    rec["jockey_code"],
+                    rec["trainer_code"],
+                    rec["body_weight"],
                 ),
             )
             se_count += 1
