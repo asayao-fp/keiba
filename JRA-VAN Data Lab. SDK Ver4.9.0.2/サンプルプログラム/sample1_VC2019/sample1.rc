@@ -1,0 +1,265 @@
+// Microsoft Visual C++ generated resource script.
+//
+#include "resource.h"
+
+#define APSTUDIO_READONLY_SYMBOLS
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 2 resource.
+//
+#include "afxres.h"
+
+/////////////////////////////////////////////////////////////////////////////
+#undef APSTUDIO_READONLY_SYMBOLS
+
+/////////////////////////////////////////////////////////////////////////////
+// 日本語 resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_JPN)
+#ifdef _WIN32
+LANGUAGE LANG_JAPANESE, SUBLANG_DEFAULT
+#pragma code_page(932)
+#endif //_WIN32
+
+#ifdef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// TEXTINCLUDE
+//
+
+1 TEXTINCLUDE 
+BEGIN
+    "resource.h\0"
+END
+
+2 TEXTINCLUDE 
+BEGIN
+    "#include ""afxres.h""\r\n"
+    "\0"
+END
+
+3 TEXTINCLUDE 
+BEGIN
+    "#define _AFX_NO_SPLITTER_RESOURCES\r\n"
+    "#define _AFX_NO_OLE_RESOURCES\r\n"
+    "#define _AFX_NO_TRACKER_RESOURCES\r\n"
+    "#define _AFX_NO_PROPERTY_RESOURCES\r\n"
+    "\r\n"
+    "#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_JPN)\r\n"
+    "#ifdef _WIN32\r\n"
+    "LANGUAGE 17, 1\r\n"
+    "#pragma code_page(932)\r\n"
+    "#endif //_WIN32\r\n"
+    "#include ""res\\sample1.rc2""  // Microsoft Visual C++ 以外のツールで編集されたリソース\r\n"
+    "#include ""l.jpn\\afxres.rc""          // 標準のコンポーネント\r\n"
+    "#endif\r\n"
+    "\0"
+END
+
+#endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Icon
+//
+
+// Icon with lowest ID value placed first to ensure application icon
+// remains consistent on all systems.
+IDR_MAINFRAME           ICON                    "res\\sample1.ico"
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Dialog
+//
+
+IDD_ABOUTBOX DIALOG  0, 0, 235, 55
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "sample1のﾊﾞｰｼﾞｮﾝ情報"
+FONT 9, "ＭＳ Ｐゴシック"
+BEGIN
+    ICON            IDR_MAINFRAME,IDC_STATIC,11,17,20,20
+    LTEXT           "sample1 Version 1.0",IDC_STATIC,40,10,119,8,SS_NOPREFIX
+    LTEXT           "Copyright (C) 2003",IDC_STATIC,40,25,119,8
+    DEFPUSHBUTTON   "OK",IDOK,178,7,50,14,WS_GROUP
+END
+
+IDD_SAMPLE1_DIALOG1 DIALOGEX 0, 0, 347, 311
+STYLE DS_SETFONT | DS_MODALFRAME | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
+EXSTYLE WS_EX_APPWINDOW
+CAPTION "Sample1 Main Form"
+FONT 9, "ＭＳ Ｐゴシック", 0, 0, 0x1
+BEGIN
+    PUSHBUTTON      "データ取込み",IDC_BUTTON1,22,17,60,25
+    PUSHBUTTON      "JVLink設定",IDC_BUTTON2,86,16,60,25
+    PUSHBUTTON      "ファイル削除",IDC_BUTTON3,151,16,58,25
+    PUSHBUTTON      "テキストクリア",IDC_BUTTON4,213,15,61,26
+    CONTROL         "",IDC_JVLINK1,"{2AB1774D-0C41-11D7-916F-0003479BEB3F}",
+                    WS_TABSTOP,284,14,49,37
+    CONTROL         "",IDC_RICHEDIT1,"RICHEDIT",TCS_HOTTRACK | TCS_VERTICAL | 
+                    TCS_FOCUSONBUTTONDOWN | TCS_OWNERDRAWFIXED | 
+                    TCS_MULTISELECT | WS_BORDER | WS_VSCROLL | WS_HSCROLL | 
+                    WS_TABSTOP,13,78,205,213
+    CONTROL         "",IDC_RICHEDIT2,"RICHEDIT",TCS_HOTTRACK | TCS_VERTICAL | 
+                    TCS_FOCUSONBUTTONDOWN | TCS_OWNERDRAWFIXED | 
+                    TCS_MULTISELECT | WS_BORDER | WS_VSCROLL | WS_HSCROLL | 
+                    WS_TABSTOP,220,78,114,213
+    LTEXT           "出力",IDC_STATIC,13,59,72,17
+    LTEXT           "読込みファイルリスト",IDC_STATIC,221,57,72,17
+END
+
+IDD_SAMPLE1_DIALOG2 DIALOGEX 0, 0, 302, 125
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | 
+    WS_SYSMENU
+CAPTION "Sample JVLink Dialog"
+FONT 9, "ＭＳ Ｐゴシック", 0, 0, 0x0
+BEGIN
+    PUSHBUTTON      "取込み開始",IDC_BUTTON1,227,7,62,21
+    PUSHBUTTON      "取込み中止",IDC_BUTTON2,227,33,62,20
+    CONTROL         "Progress1",IDC_PROGRESS1,"msctls_progress32",WS_BORDER,
+                    11,80,151,10
+    CONTROL         "Progress2",IDC_PROGRESS2,"msctls_progress32",WS_BORDER,
+                    11,107,151,10
+    LTEXT           "ダウンロード",IDC_STATIC,12,70,47,9
+    LTEXT           "読込みファイル",IDC_STATIC,11,95,47,11
+    EDITTEXT        IDC_EDIT1,9,22,138,14,ES_AUTOHSCROLL
+    EDITTEXT        IDC_EDIT2,150,22,72,14,ES_AUTOHSCROLL
+    GROUPBOX        "取得データ",IDC_STATIC,10,39,211,28,WS_GROUP
+    CONTROL         "通常データ",IDC_RADIO1,"Button",BS_AUTORADIOBUTTON | 
+                    WS_GROUP,18,48,44,17
+    CONTROL         "今週開催データ",IDC_RADIO2,"Button",BS_AUTORADIOBUTTON,
+                    73,47,59,18
+    CONTROL         "セットアップデータ",IDC_RADIO3,"Button",
+                    BS_AUTORADIOBUTTON,140,47,73,18
+    LTEXT           "ファイル識別子",IDC_STATIC,10,11,49,9
+    LTEXT           "データ提供日FROM",IDC_STATIC,151,13,73,8
+END
+
+IDD_SAMPLE1_DLGDEL DIALOG  0, 0, 187, 41
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | 
+    WS_SYSMENU
+CAPTION "ファイル削除"
+FONT 9, "ＭＳ Ｐゴシック"
+BEGIN
+    PUSHBUTTON      "OK",IDC_BUTTON1,140,6,44,16
+    EDITTEXT        IDC_EDIT1,9,19,122,14,ES_AUTOHSCROLL
+    LTEXT           "ファイル名を入力して下さい。",IDC_STATIC,10,5,88,10
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,1
+ PRODUCTVERSION 1,0,0,1
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x4L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041104B0"
+        BEGIN
+            VALUE "FileDescription", "sample1 MFC ｱﾌﾟﾘｹｰｼｮﾝ"
+            VALUE "FileVersion", "1, 0, 0, 1"
+            VALUE "InternalName", "sample1"
+            VALUE "LegalCopyright", "Copyright (C) 2003"
+            VALUE "OriginalFilename", "sample1.EXE"
+            VALUE "ProductName", "sample1 ｱﾌﾟﾘｹｰｼｮﾝ"
+            VALUE "ProductVersion", "1, 0, 0, 1"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x411, 1200
+    END
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// DESIGNINFO
+//
+
+#ifdef APSTUDIO_INVOKED
+GUIDELINES DESIGNINFO 
+BEGIN
+    IDD_ABOUTBOX, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 228
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 48
+    END
+
+    IDD_SAMPLE1_DIALOG1, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 340
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 304
+    END
+END
+#endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Dialog Info
+//
+
+IDD_SAMPLE1_DIALOG1 DLGINIT
+BEGIN
+    IDC_JVLINK1, 0x376, 28, 0
+0x0000, 0x0000, 0x0700, 0x0000, 0x08e3, 0x0000, 0x05ca, 0x0000, 0xef02, 
+0x0055, 0x0000, 0x0000, 0x0e9c, 0x03e1, 
+    0
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// String Table
+//
+
+STRINGTABLE 
+BEGIN
+    IDS_ABOUTBOX            "sample1 のﾊﾞｰｼﾞｮﾝ情報(&A)..."
+END
+
+#endif    // 日本語 resources
+/////////////////////////////////////////////////////////////////////////////
+
+
+
+#ifndef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 3 resource.
+//
+#define _AFX_NO_SPLITTER_RESOURCES
+#define _AFX_NO_OLE_RESOURCES
+#define _AFX_NO_TRACKER_RESOURCES
+#define _AFX_NO_PROPERTY_RESOURCES
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_JPN)
+#ifdef _WIN32
+LANGUAGE 17, 1
+#pragma code_page(932)
+#endif //_WIN32
+#include "res\sample1.rc2"  // Microsoft Visual C++ 以外のツールで編集されたリソース
+#include "l.jpn\afxres.rc"          // 標準のコンポーネント
+#endif
+
+/////////////////////////////////////////////////////////////////////////////
+#endif    // not APSTUDIO_INVOKED
+
