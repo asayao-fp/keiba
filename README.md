@@ -261,7 +261,7 @@ python scripts/predict_place.py --db jv_data.db --race-key 202401010102010101 --
 
 ## 買い目提案スクリプト
 
-予測 JSON とオッズ CSV を突合して期待値を計算し、複勝買い目候補を出力します。
+予測 JSON とオッズ CSV (または DB) を突合して期待値を計算し、複勝買い目候補を出力します。
 
 ### オッズ CSV 仕様
 
@@ -305,15 +305,17 @@ python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sampl
 
 ### オプション
 
-| オプション      | 必須 | 説明                                                                                 |
-|---------------|------|--------------------------------------------------------------------------------------|
-| `--pred-json` | ✓    | `predict_place.py` が出力した JSON ファイルパス                                      |
-| `--odds-csv`  | ✓    | オッズ CSV ファイルパス                                                               |
-| `--format`    |      | 出力フォーマット: `json` / `csv` (デフォルト: `json`)                                |
-| `--odds-use`  |      | 使用するオッズ: `min` / `max` / `mid` (デフォルト: `min`)                            |
-| `--min-ev`    |      | 期待値しきい値 (デフォルト: `0.0`)。これ以上の期待値の馬のみを候補とする              |
-| `--stake`     |      | 1点あたり賭け金・円 (デフォルト: `100`)                                              |
-| `--max-bets`  |      | 最大購入点数 (デフォルト: `3`)                                                       |
+| オプション      | 必須        | 説明                                                                                 |
+|---------------|-------------|--------------------------------------------------------------------------------------|
+| `--pred-json` | ✓           | `predict_place.py` が出力した JSON ファイルパス                                      |
+| `--odds-csv`  |             | オッズ CSV ファイルパス。省略時は `--db` / `--race-key` から DB を参照              |
+| `--db`        | ※CSV省略時✓ | SQLite DB ファイルパス (`--odds-csv` 省略時に使用)                                   |
+| `--race-key`  | ※CSV省略時✓ | レースキー (`--odds-csv` 省略時に使用)                                               |
+| `--format`    |             | 出力フォーマット: `json` / `csv` (デフォルト: `json`)                                |
+| `--odds-use`  |             | 使用するオッズ: `min` / `max` / `mid` (デフォルト: `min`)                            |
+| `--min-ev`    |             | 期待値しきい値 (デフォルト: `0.0`)。これ以上の期待値の馬のみを候補とする              |
+| `--stake`     |             | 1点あたり賭け金・円 (デフォルト: `100`)                                              |
+| `--max-bets`  |             | 最大購入点数 (デフォルト: `3`)                                                       |
 
 ### 出力フィールド
 
@@ -328,3 +330,46 @@ python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sampl
 | `ev_per_1unit`     | 1単位賭けあたりの期待値 (`p_place * odds - 1`) |
 | `stake`            | 賭け金 (円)                                    |
 | `expected_value_yen` | 期待値 (円) = `ev_per_1unit * stake`         |
+
+---
+
+## 複勝オッズ自動取得 (O1 レコード)
+
+JV-Link から O1 レコード (単複オッズ) を取得して DB に格納することで、CSVを手入力せずにオッズを自動取得できます。
+
+### オッズ取得〜買い目提案 の手順
+
+```bat
+rem 1. O1 レコードを含む DataSpec (例: ODDS) で ingest
+python scripts/jv_ingest_raw.py --from-date 20240101 --dataspec RACE,ODDS
+
+rem 2. O1 レコードをパースして place_odds テーブルを生成
+python scripts/build_place_odds_from_raw.py --db jv_data.db
+
+rem    特定の dataspec に絞る場合
+python scripts/build_place_odds_from_raw.py --db jv_data.db --dataspec ODDS
+
+rem 3. 推論
+python scripts/predict_place.py --db jv_data.db --race-key 202401010102010101 --model models/place_model.cbm --format json > pred.json
+
+rem 4. CSV なしで DB からオッズを自動取得して買い目提案
+python scripts/suggest_place_bets.py --pred-json pred.json --db jv_data.db --race-key 202401010102010101
+```
+
+### `build_place_odds_from_raw.py` オプション
+
+| オプション    | 説明                                                                       |
+|-------------|----------------------------------------------------------------------------|
+| `--db`      | SQLite DB ファイルパス (デフォルト: `jv_data.db`)                           |
+| `--dataspec`| dataspec で絞り込む場合に指定 (省略時は全レコードから O1 を検索)            |
+
+### `place_odds` テーブル
+
+| カラム           | 型      | 説明                                       |
+|----------------|---------|--------------------------------------------|
+| race_key       | TEXT    | レースキー (主キーの一部)                    |
+| horse_no       | TEXT    | 馬番 (主キーの一部)                          |
+| place_odds_min | REAL    | 複勝オッズ 最小値 (4桁整数÷10)              |
+| place_odds_max | REAL    | 複勝オッズ 最大値 (4桁整数÷10)              |
+| announced_at   | TEXT    | 発表日時 (yyyy + mmddHHMM)                  |
+| updated_at     | TEXT    | 処理日時 (ISO 8601)                         |
