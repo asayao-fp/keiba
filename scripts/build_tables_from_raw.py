@@ -209,14 +209,17 @@ def build_tables(db_path: str, graded_only: bool) -> None:
 
     now = datetime.datetime.now().isoformat()
 
-    rows = conn.execute(
-        "SELECT payload_text FROM raw_jv_records WHERE dataspec = 'RACE'"
-    ).fetchall()
+    cursor = conn.execute(
+        "SELECT payload_text FROM raw_jv_records"
+        " WHERE dataspec = 'RACE'"
+        " AND SUBSTR(payload_text, 1, 2) IN ('RA', 'SE')"
+    )
 
     ra_count = 0
     se_count = 0
+    processed = 0
 
-    for (payload,) in rows:
+    for (payload,) in cursor:
         if not payload:
             continue
         record_type = payload[:2]
@@ -258,6 +261,9 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                 ),
             )
             ra_count += 1
+            processed += 1
+            if processed % 50_000 == 0:
+                print(f"[INFO] 処理済み: {processed} 件")
 
         elif record_type == "SE":
             rec = parse_se(payload)
@@ -294,6 +300,9 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                 ),
             )
             se_count += 1
+            processed += 1
+            if processed % 50_000 == 0:
+                print(f"[INFO] 処理済み: {processed} 件")
 
     conn.commit()
 

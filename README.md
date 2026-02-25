@@ -52,6 +52,7 @@ python scripts/jv_ingest_raw.py --from-date 20240101000000 --dataspec RACE --dat
 |------|------|
 | `JVInit` が `-101` で失敗する | `--sid ""` のように空文字を渡していた場合は引数を省略するか `--sid UNKNOWN` を指定してください (デフォルトは `UNKNOWN`) |
 | `JVOpen` が `-1` で失敗する | 契約・提供対象外の DataSpec の可能性があります。`--dataspec` から該当 DataSpec を除外してください |
+| `build_tables_from_raw.py` で `MemoryError` が発生する | `build_tables_from_raw.py` はストリーミング処理 (カーソルイテレーション) を採用しており、全件を一度にメモリに読み込まないため MemoryError は発生しません。旧バージョンをお使いの場合は最新版に更新してください。 |
 
 ### 保存先 SQLite テーブル
 
