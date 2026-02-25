@@ -188,3 +188,96 @@ sqlite3 jv_data.db "SELECT MIN(body_weight), MAX(body_weight), AVG(body_weight) 
 rem 斤量の min/max/avg (単位 0.1kg)
 sqlite3 jv_data.db "SELECT MIN(handicap_weight_x10), MAX(handicap_weight_x10), AVG(handicap_weight_x10) FROM entries WHERE handicap_weight_x10 IS NOT NULL;"
 ```
+
+---
+
+## 複勝予測スクリプト
+
+学習済みモデルを使って指定レースの複勝圏確率 p_place を推論します。
+
+### 実行例
+
+```bat
+rem 推論 (JSON 出力)
+python scripts/predict_place.py --db jv_data.db --race-key 202401010102010101 --model models/place_model.cbm --format json > pred.json
+
+rem 推論 (JSONL 出力、デフォルト)
+python scripts/predict_place.py --db jv_data.db --race-key 202401010102010101 --model models/place_model.cbm
+
+rem 推論 (テーブル表示)
+python scripts/predict_place.py --db jv_data.db --race-key 202401010102010101 --model models/place_model.cbm --format table
+```
+
+### オプション
+
+| オプション     | 必須 | 説明                                                                      |
+|--------------|------|---------------------------------------------------------------------------|
+| `--db`       |      | SQLite DB ファイルパス (デフォルト: `jv_data.db`)                          |
+| `--race-key` | ✓    | レースキー (例: `202401010102010101`)                                      |
+| `--model`    |      | 学習済みモデルパス (デフォルト: `models/place_model.cbm`)                  |
+| `--format`   |      | 出力フォーマット: `jsonl` / `json` / `table` (デフォルト: `jsonl`)         |
+
+---
+
+## 買い目提案スクリプト
+
+予測 JSON とオッズ CSV を突合して期待値を計算し、複勝買い目候補を出力します。
+
+### オッズ CSV 仕様
+
+`data/sample_place_odds.csv` を参照してください。ヘッダ必須、追加列は無視されます。
+
+| 列名              | 説明               |
+|-----------------|--------------------|
+| `horse_no`      | 馬番               |
+| `place_odds_min`| 複勝オッズ 最小値  |
+| `place_odds_max`| 複勝オッズ 最大値  |
+
+```csv
+horse_no,place_odds_min,place_odds_max
+01,2.5,3.1
+02,4.0,5.2
+03,1.8,2.3
+```
+
+### 予測→オッズ CSV 用意→買い目提案 の実行例
+
+```bat
+rem 1. 複勝圏確率を推論して JSON に保存
+python scripts/predict_place.py --db jv_data.db --race-key 202401010102010101 --model models/place_model.cbm --format json > pred.json
+
+rem 2. オッズ CSV を用意 (手入力 or 別途取得)
+rem    data/sample_place_odds.csv を参考に作成してください。
+
+rem 3. 買い目候補を JSON で出力 (デフォルト: min オッズ, 期待値 >= 0.0, 上位 3 点, 100 円賭け)
+python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv
+
+rem 4. CSV 出力、オッズは中央値、期待値しきい値 0.05、1点 500 円、最大 5 点
+python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --format csv --odds-use mid --min-ev 0.05 --stake 500 --max-bets 5
+```
+
+### オプション
+
+| オプション      | 必須 | 説明                                                                                 |
+|---------------|------|--------------------------------------------------------------------------------------|
+| `--pred-json` | ✓    | `predict_place.py` が出力した JSON ファイルパス                                      |
+| `--odds-csv`  | ✓    | オッズ CSV ファイルパス                                                               |
+| `--format`    |      | 出力フォーマット: `json` / `csv` (デフォルト: `json`)                                |
+| `--odds-use`  |      | 使用するオッズ: `min` / `max` / `mid` (デフォルト: `min`)                            |
+| `--min-ev`    |      | 期待値しきい値 (デフォルト: `0.0`)。これ以上の期待値の馬のみを候補とする              |
+| `--stake`     |      | 1点あたり賭け金・円 (デフォルト: `100`)                                              |
+| `--max-bets`  |      | 最大購入点数 (デフォルト: `3`)                                                       |
+
+### 出力フィールド
+
+| フィールド           | 説明                                           |
+|--------------------|------------------------------------------------|
+| `horse_no`         | 馬番                                           |
+| `horse_id`         | 血統登録番号                                   |
+| `p_place`          | 複勝圏確率                                     |
+| `place_odds_min`   | 複勝オッズ 最小値                              |
+| `place_odds_max`   | 複勝オッズ 最大値                              |
+| `place_odds_used`  | 期待値計算に使用したオッズ                     |
+| `ev_per_1unit`     | 1単位賭けあたりの期待値 (`p_place * odds - 1`) |
+| `stake`            | 賭け金 (円)                                    |
+| `expected_value_yen` | 期待値 (円) = `ev_per_1unit * stake`         |
