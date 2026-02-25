@@ -20,8 +20,8 @@ from sklearn.model_selection import train_test_split
 DEFAULT_TRAIN_CSV = "data/place_train.csv"
 DEFAULT_MODEL_OUT = "models/place_model.cbm"
 
-CATEGORICAL_FEATURES = ["jockey_code", "trainer_code", "course_code", "grade_code"]
-NUMERIC_FEATURES = ["body_weight", "handicap_weight_x10"]
+CATEGORICAL_FEATURES = ["jockey_code", "trainer_code", "course_code", "grade_code", "track_code"]
+NUMERIC_FEATURES = ["body_weight", "handicap_weight_x10", "distance_m"]
 FEATURE_COLS = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 TARGET_COL = "is_place"
 

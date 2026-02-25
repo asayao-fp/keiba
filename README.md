@@ -96,6 +96,8 @@ rem 重賞レース (grade_code が空白以外) のみを出力テーブルに�
 python scripts/build_tables_from_raw.py --db jv_data.db --graded-only
 ```
 
+> **既存 DB への列追加 (冪等)**: `build_tables_from_raw.py` を再実行すると、`races` テーブルに `distance_m` / `track_code` 列が存在しない場合は自動的に追加されます。既に列が存在する場合はスキップされます。
+
 ### オプション
 
 #### `build_masters_from_raw.py`
@@ -125,6 +127,8 @@ python scripts/build_tables_from_raw.py --db jv_data.db --graded-only
 | race_no        | TEXT    | レース番号 (2桁)                           |
 | grade_code     | TEXT    | グレードコード (空白=平場, A/B/C等=重賞)    |
 | race_name_short| TEXT    | 競走名略称 (全角3文字)                      |
+| distance_m     | INTEGER | 距離 (メートル, 取得不可の場合は NULL)       |
+| track_code     | TEXT    | トラックコード2009 (2桁, 取得不可の場合は NULL) |
 | created_at     | TEXT    | レコード生成日時 (ISO 8601)                 |
 
 #### `entries` テーブル
@@ -187,6 +191,41 @@ sqlite3 jv_data.db "SELECT MIN(body_weight), MAX(body_weight), AVG(body_weight) 
 
 rem 斤量の min/max/avg (単位 0.1kg)
 sqlite3 jv_data.db "SELECT MIN(handicap_weight_x10), MAX(handicap_weight_x10), AVG(handicap_weight_x10) FROM entries WHERE handicap_weight_x10 IS NOT NULL;"
+
+rem 距離の件数・min/max/avg
+sqlite3 jv_data.db "SELECT COUNT(*), MIN(distance_m), MAX(distance_m), AVG(distance_m) FROM races WHERE distance_m IS NOT NULL;"
+
+rem トラックコードごとのレース数
+sqlite3 jv_data.db "SELECT track_code, COUNT(*) FROM races WHERE track_code IS NOT NULL GROUP BY track_code ORDER BY COUNT(*) DESC;"
+```
+
+---
+
+## 予測モデル (複勝圏)
+
+`races.distance_m` (距離, メートル) と `races.track_code` (トラックコード2009) が学習・推論の特徴量として使用されます。
+
+| 特徴量カテゴリ  | 列名                                                           |
+|--------------|----------------------------------------------------------------|
+| 数値特徴量     | `body_weight`, `handicap_weight_x10`, `distance_m`            |
+| カテゴリ特徴量 | `jockey_code`, `trainer_code`, `course_code`, `grade_code`, `track_code` |
+
+### 学習データ生成
+
+```bat
+python scripts/build_place_training_data.py --db jv_data.db --out data/place_train.csv
+```
+
+### 学習
+
+```bat
+python scripts/train_place_model.py --train-csv data/place_train.csv --model-out models/place_model.cbm
+```
+
+### 推論
+
+```bat
+python scripts/predict_place.py --db jv_data.db --race-key <RACE_KEY> --model models/place_model.cbm
 ```
 
 ---
