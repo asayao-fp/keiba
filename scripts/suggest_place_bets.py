@@ -8,6 +8,7 @@ suggest_place_bets.py
   python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --format csv
   python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --odds-use mid --min-ev 0.05 --stake 500 --max-bets 5
   python scripts/suggest_place_bets.py --pred-json pred.json --db jv_data.db --race-key 202401010102010101
+  python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --rank-by p --min-p-place 0.22 --max-odds-used 12 --odds-use min
 """
 
 import argparse
@@ -78,6 +79,26 @@ def parse_args():
         default=3,
         metavar="INT",
         help="最大購入点数 (デフォルト: 3)",
+    )
+    parser.add_argument(
+        "--rank-by",
+        choices=["p", "ev", "ev_then_p"],
+        default="ev",
+        help="ランキング基準: p=p_place降順, ev=期待値降順 (デフォルト), ev_then_p=期待値降順→同率はp_placeでtie-break",
+    )
+    parser.add_argument(
+        "--min-p-place",
+        type=float,
+        default=0.0,
+        metavar="FLOAT",
+        help="複勝圏確率の下限しきい値 (デフォルト: 0.0)。これ未満の候補は除外",
+    )
+    parser.add_argument(
+        "--max-odds-used",
+        type=float,
+        default=None,
+        metavar="FLOAT",
+        help="使用オッズの上限 (デフォルト: なし)。これを超える候補は除外",
     )
     return parser.parse_args()
 
@@ -235,8 +256,12 @@ def compute_bets(
     min_ev: float,
     stake: int,
     max_bets: int,
+    rank_by: str = "ev",
+    min_p_place: float = 0.0,
+    max_odds_used: float | None = None,
 ) -> list[dict]:
     results = []
+    skipped_no_odds = 0
     for row in pred_rows:
         horse_no = _norm_horse_no(row.get("horse_no", ""))
         if horse_no not in odds_map:
@@ -244,6 +269,7 @@ def compute_bets(
                 f"[WARN] horse_no={horse_no} はオッズ CSV にありません。スキップします。",
                 file=sys.stderr,
             )
+            skipped_no_odds += 1
             continue
 
         p_place = float(row["p_place"])
@@ -276,11 +302,41 @@ def compute_bets(
             }
         )
 
-    # ev_per_1unit 降順
-    results.sort(key=lambda r: r["ev_per_1unit"], reverse=True)
+    if skipped_no_odds:
+        print(f"[INFO] オッズなしでスキップ: {skipped_no_odds}件", file=sys.stderr)
+
+    # min_p_place フィルタ
+    before = len(results)
+    results = [r for r in results if r["p_place"] >= min_p_place]
+    filtered_p = before - len(results)
+    if filtered_p:
+        print(f"[INFO] --min-p-place={min_p_place} により除外: {filtered_p}件", file=sys.stderr)
+
+    # max_odds_used フィルタ
+    if max_odds_used is not None:
+        before = len(results)
+        results = [r for r in results if r["place_odds_used"] <= max_odds_used]
+        filtered_odds = before - len(results)
+        if filtered_odds:
+            print(
+                f"[INFO] --max-odds-used={max_odds_used} により除外: {filtered_odds}件",
+                file=sys.stderr,
+            )
 
     # min_ev フィルタ
+    before = len(results)
     results = [r for r in results if r["ev_per_1unit"] >= min_ev]
+    filtered_ev = before - len(results)
+    if filtered_ev:
+        print(f"[INFO] --min-ev={min_ev} により除外: {filtered_ev}件", file=sys.stderr)
+
+    # ランキング
+    if rank_by == "p":
+        results.sort(key=lambda r: r["p_place"], reverse=True)
+    elif rank_by == "ev_then_p":
+        results.sort(key=lambda r: (r["ev_per_1unit"], r["p_place"]), reverse=True)
+    else:  # ev (デフォルト)
+        results.sort(key=lambda r: r["ev_per_1unit"], reverse=True)
 
     # max_bets で切る
     results = results[:max_bets]
@@ -323,6 +379,9 @@ def main():
         min_ev=args.min_ev,
         stake=args.stake,
         max_bets=args.max_bets,
+        rank_by=args.rank_by,
+        min_p_place=args.min_p_place,
+        max_odds_used=args.max_odds_used,
     )
 
     if args.fmt == "csv":
