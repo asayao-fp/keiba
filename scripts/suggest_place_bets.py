@@ -1,23 +1,25 @@
 """
 suggest_place_bets.py
 =====================
-予測確率 JSON とオッズ CSV を突合して複勝買い目候補を出力する。
+予測確率 JSON とオッズ CSV (または DB) を突合して複勝買い目候補を出力する。
 
 使用例:
   python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv
   python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --format csv
   python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --odds-use mid --min-ev 0.05 --stake 500 --max-bets 5
+  python scripts/suggest_place_bets.py --pred-json pred.json --db jv_data.db --race-key 202401010102010101
 """
 
 import argparse
 import csv
 import json
+import sqlite3
 import sys
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="予測確率 JSON とオッズ CSV から複勝買い目候補を出力する"
+        description="予測確率 JSON とオッズ CSV または DB から複勝買い目候補を出力する"
     )
     parser.add_argument(
         "--pred-json",
@@ -27,9 +29,21 @@ def parse_args():
     )
     parser.add_argument(
         "--odds-csv",
-        required=True,
+        default=None,
         metavar="PATH",
-        help="オッズ CSV ファイルパス (horse_no, place_odds_min, place_odds_max 列必須)",
+        help="オッズ CSV ファイルパス (horse_no, place_odds_min, place_odds_max 列必須)。省略時は --db/--race-key から取得",
+    )
+    parser.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="SQLite DB ファイルパス (--odds-csv 省略時に使用)",
+    )
+    parser.add_argument(
+        "--race-key",
+        default=None,
+        metavar="KEY",
+        help="レースキー (--odds-csv 省略時に使用)",
     )
     parser.add_argument(
         "--format",
@@ -66,6 +80,14 @@ def parse_args():
         help="最大購入点数 (デフォルト: 3)",
     )
     return parser.parse_args()
+
+
+def _norm_horse_no(x) -> str:
+    """馬番を正規化する。"04" と "4" を同一視するため int 変換後に文字列化する。"""
+    try:
+        return str(int(str(x)))
+    except (ValueError, TypeError):
+        return str(x)
 
 
 def load_pred_json(path: str) -> list[dict]:
@@ -166,10 +188,42 @@ def load_odds_csv(path: str) -> dict[str, dict]:
                 )
                 sys.exit(1)
 
-            odds_map[horse_no] = {
+            odds_map[_norm_horse_no(horse_no)] = {
                 "place_odds_min": odds_min,
                 "place_odds_max": odds_max,
             }
+
+    return odds_map
+
+
+def load_odds_db(db_path: str, race_key: str) -> dict[str, dict]:
+    """place_odds テーブルから horse_no をキーとするオッズ辞書を返す。"""
+    try:
+        conn = sqlite3.connect(db_path)
+    except sqlite3.OperationalError as e:
+        print(f"[ERROR] DB 接続に失敗しました: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    with conn:
+        cursor = conn.execute(
+            "SELECT horse_no, place_odds_min, place_odds_max"
+            " FROM place_odds WHERE race_key = ?",
+            (race_key,),
+        )
+        odds_map: dict[str, dict] = {}
+        for horse_no, odds_min, odds_max in cursor:
+            if odds_min is None or odds_max is None:
+                continue
+            odds_map[_norm_horse_no(horse_no)] = {
+                "place_odds_min": odds_min,
+                "place_odds_max": odds_max,
+            }
+
+    if not odds_map:
+        print(
+            f"[WARN] DB の place_odds テーブルに race_key={race_key} のデータがありません。",
+            file=sys.stderr,
+        )
 
     return odds_map
 
@@ -184,7 +238,7 @@ def compute_bets(
 ) -> list[dict]:
     results = []
     for row in pred_rows:
-        horse_no = str(row.get("horse_no", ""))
+        horse_no = _norm_horse_no(row.get("horse_no", ""))
         if horse_no not in odds_map:
             print(
                 f"[WARN] horse_no={horse_no} はオッズ CSV にありません。スキップします。",
@@ -250,7 +304,17 @@ def main():
     args = parse_args()
 
     pred_rows = load_pred_json(args.pred_json)
-    odds_map = load_odds_csv(args.odds_csv)
+
+    if args.odds_csv is not None:
+        odds_map = load_odds_csv(args.odds_csv)
+    else:
+        if not args.db or not args.race_key:
+            print(
+                "[ERROR] --odds-csv を省略する場合は --db と --race-key を両方指定してください。",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        odds_map = load_odds_db(args.db, args.race_key)
 
     bets = compute_bets(
         pred_rows,

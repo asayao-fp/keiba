@@ -32,3 +32,13 @@ CREATE TABLE IF NOT EXISTS entries (
     handicap_weight_x10  INTEGER,
     UNIQUE (race_key, horse_no)
 );
+
+CREATE TABLE IF NOT EXISTS place_odds (
+    race_key        TEXT    NOT NULL,
+    horse_no        TEXT    NOT NULL,
+    place_odds_min  REAL,
+    place_odds_max  REAL,
+    announced_at    TEXT,
+    updated_at      TEXT    NOT NULL,
+    PRIMARY KEY (race_key, horse_no)
+);
