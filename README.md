@@ -304,6 +304,9 @@ python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sampl
 
 rem 5. 当たりやすさ優先: p_place 降順, 複勝確率 0.22 以上, オッズ 12 以下, min オッズ使用
 python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --rank-by p --min-p-place 0.22 --max-odds-used 12 --odds-use min
+
+rem 6. balance モード: 収益性 (EV>=0) を維持しつつ的中率重視プリセット
+python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --mode balance
 ```
 
 ### オプション
@@ -322,6 +325,30 @@ python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sampl
 | `--rank-by`   |             | ランキング基準: `ev`=期待値降順 (デフォルト) / `p`=確率降順 / `ev_then_p`=期待値→確率 |
 | `--min-p-place` |           | 複勝圏確率の下限 (デフォルト: `0.0`)。これ未満の候補は除外                           |
 | `--max-odds-used` |         | 使用オッズの上限 (デフォルト: なし)。これを超える候補は除外                           |
+| `--mode`        |           | プリセットモード: `balance`=収益性維持+的中率重視, `none`=プリセットなし (デフォルト)  |
+
+### `--mode balance` プリセット
+
+`--mode balance` は、**収益性 (EV≥0) を維持しつつ的中率を重視する**プリセットです。
+明示的に指定されていない引数に対して以下のデフォルト値が適用されます:
+
+| 引数             | balance 時のデフォルト | 説明                                         |
+|----------------|----------------------|----------------------------------------------|
+| `--rank-by`    | `ev_then_p`          | 期待値降順、同率時は p_place でタイブレーク   |
+| `--min-ev`     | `0.0`                | EV≥0 の制約は維持 (収益性を緩めない)         |
+| `--min-p-place`| `0.20`               | 複勝圏確率 20% 未満を除外                    |
+| `--max-odds-used`| `15.0`             | オッズ 15.0 超の候補を除外 (低確率馬を排除)    |
+| `--odds-use`   | `min`                | 最小オッズで保守的に期待値計算               |
+
+ユーザーが明示的に指定した引数は上記デフォルト値より優先されます。例えば `--mode balance --min-p-place 0.25` とすると、`min_p_place` は 0.20 ではなく 0.25 が使用されます。
+
+```bat
+rem balance モード (デフォルト設定でそのまま使用)
+python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --mode balance
+
+rem balance モードで一部オプションを上書き
+python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --mode balance --min-p-place 0.25 --max-bets 5
+```
 
 ### 出力フィールド
 
