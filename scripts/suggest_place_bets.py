@@ -9,6 +9,7 @@ suggest_place_bets.py
   python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --odds-use mid --min-ev 0.05 --stake 500 --max-bets 5
   python scripts/suggest_place_bets.py --pred-json pred.json --db jv_data.db --race-key 202401010102010101
   python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --rank-by p --min-p-place 0.22 --max-odds-used 12 --odds-use min
+  python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --mode balance
 """
 
 import argparse
@@ -83,22 +84,30 @@ def parse_args():
     parser.add_argument(
         "--rank-by",
         choices=["p", "ev", "ev_then_p"],
-        default="ev",
-        help="ランキング基準: p=p_place降順, ev=期待値降順 (デフォルト), ev_then_p=期待値降順→同率はp_placeでtie-break",
+        default=None,
+        help="ランキング基準: p=p_place降順, ev=期待値降順, ev_then_p=期待値降順→同率はp_placeでtie-break"
+        " (デフォルト: ev、balance モード時は ev_then_p)",
     )
     parser.add_argument(
         "--min-p-place",
         type=float,
-        default=0.0,
+        default=None,
         metavar="FLOAT",
-        help="複勝圏確率の下限しきい値 (デフォルト: 0.0)。これ未満の候補は除外",
+        help="複勝圏確率の下限しきい値 (デフォルト: 0.0、balance モード時は 0.20)。これ未満の候補は除外",
     )
     parser.add_argument(
         "--max-odds-used",
         type=float,
         default=None,
         metavar="FLOAT",
-        help="使用オッズの上限 (デフォルト: なし)。これを超える候補は除外",
+        help="使用オッズの上限 (デフォルト: なし、balance モード時は 15)。これを超える候補は除外",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["balance"],
+        default=None,
+        help="運用プリセット: balance=収益性を維持しつつ当たりやすさにも配慮"
+        " (rank_by=ev_then_p, min_p_place=0.20, max_odds_used=15 をデフォルト設定。明示指定した引数は優先される)",
     )
     return parser.parse_args()
 
@@ -358,6 +367,27 @@ def output_csv(rows: list[dict]) -> None:
 
 def main():
     args = parse_args()
+
+    # --mode balance: apply preset defaults for args not explicitly set by user
+    if args.mode == "balance":
+        if args.rank_by is None:
+            args.rank_by = "ev_then_p"
+        if args.min_p_place is None:
+            args.min_p_place = 0.20
+        if args.max_odds_used is None:
+            args.max_odds_used = 15.0
+
+    # Apply global defaults for any remaining unset args
+    if args.rank_by is None:
+        args.rank_by = "ev"
+    if args.min_p_place is None:
+        args.min_p_place = 0.0
+
+    print(
+        f"[INFO] 採用基準: rank_by={args.rank_by}, min_p_place={args.min_p_place},"
+        f" max_odds_used={args.max_odds_used}, min_ev={args.min_ev}, odds_use={args.odds_use}",
+        file=sys.stderr,
+    )
 
     pred_rows = load_pred_json(args.pred_json)
 
