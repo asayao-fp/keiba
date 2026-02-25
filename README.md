@@ -282,6 +282,13 @@ horse_no,place_odds_min,place_odds_max
 
 ### 予測→オッズ CSV 用意→買い目提案 の実行例
 
+> **PowerShell をお使いの場合**: PowerShell の `>` リダイレクトは UTF-16LE または UTF-8 BOM 付きでファイルを保存することがあります。
+> `suggest_place_bets.py` はこれらのエンコーディングを自動検知して読み込めます。
+> より確実な方法として、以下のように明示的に UTF-8 (BOM なし) で保存することも可能です:
+> ```powershell
+> python scripts/predict_place.py ... --format json | Out-File -Encoding utf8NoBOM pred.json
+> ```
+
 ```bat
 rem 1. 複勝圏確率を推論して JSON に保存
 python scripts/predict_place.py --db jv_data.db --race-key 202401010102010101 --model models/place_model.cbm --format json > pred.json

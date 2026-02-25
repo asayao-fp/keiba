@@ -69,12 +69,37 @@ def parse_args():
 
 
 def load_pred_json(path: str) -> list[dict]:
+    # BOM 付き UTF-8 / UTF-16LE / UTF-16BE に対応するためバイナリで読み込む
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+        with open(path, "rb") as f:
+            raw = f.read()
     except FileNotFoundError:
         print(f"[ERROR] 予測 JSON が見つかりません: {path}", file=sys.stderr)
         sys.exit(1)
+
+    if raw.startswith(b"\xff\xfe"):
+        encoding = "utf-16-le"
+        raw = raw[2:]
+    elif raw.startswith(b"\xfe\xff"):
+        encoding = "utf-16-be"
+        raw = raw[2:]
+    elif raw.startswith(b"\xef\xbb\xbf"):
+        encoding = "utf-8"
+        raw = raw[3:]
+    else:
+        encoding = "utf-8"
+
+    try:
+        text = raw.decode(encoding)
+    except UnicodeDecodeError as e:
+        print(
+            f"[ERROR] 予測 JSON のデコードに失敗しました (encoding={encoding}): {e}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        data = json.loads(text)
     except json.JSONDecodeError as e:
         print(f"[ERROR] 予測 JSON の解析に失敗しました: {e}", file=sys.stderr)
         sys.exit(1)
@@ -87,7 +112,7 @@ def load_pred_json(path: str) -> list[dict]:
 def load_odds_csv(path: str) -> dict[str, dict]:
     """horse_no をキーとするオッズ辞書を返す。不正な行はエラー終了。"""
     try:
-        f = open(path, encoding="utf-8", newline="")
+        f = open(path, encoding="utf-8-sig", newline="")
     except FileNotFoundError:
         print(f"[ERROR] オッズ CSV が見つかりません: {path}", file=sys.stderr)
         sys.exit(1)
