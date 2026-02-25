@@ -22,8 +22,8 @@ from output_utils import print_rows
 DEFAULT_DB_PATH = "jv_data.db"
 DEFAULT_MODEL_PATH = "models/place_model.cbm"
 
-CATEGORICAL_FEATURES = ["jockey_code", "trainer_code", "course_code", "grade_code"]
-NUMERIC_FEATURES = ["body_weight", "handicap_weight_x10"]
+CATEGORICAL_FEATURES = ["jockey_code", "trainer_code", "course_code", "grade_code", "track_code"]
+NUMERIC_FEATURES = ["body_weight", "handicap_weight_x10", "distance_m"]
 FEATURE_COLS = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 
 
@@ -41,7 +41,9 @@ def fetch_entries_for_race(conn: sqlite3.Connection, race_key: str) -> list[dict
             e.jockey_code,
             e.trainer_code,
             e.body_weight,
-            e.handicap_weight_x10
+            e.handicap_weight_x10,
+            r.distance_m,
+            r.track_code
         FROM entries e
         JOIN races r ON r.race_key = e.race_key
         WHERE e.race_key = ?

@@ -28,7 +28,7 @@ def parse_ra(payload: str):
     レコード種別識別子が 'RA' でない場合は None を返す。
     """
     b = payload.encode("cp932")
-    if len(b) < 615 or payload[:2] != "RA":
+    if len(b) < 707 or payload[:2] != "RA":
         return None
 
     yyyy        = _sb(b, 12, 4)
@@ -39,6 +39,20 @@ def parse_ra(payload: str):
     raceno      = _sb(b, 26, 2)
     race_name_short = _sb(b, 605, 6)
     grade_code  = _sb(b, 615, 1)
+
+    # 距離 (メートル)
+    distance_m = None
+    distance_raw = _sb(b, 637, 4).strip()
+    if distance_raw:
+        try:
+            dm = int(distance_raw)
+            if dm > 0:
+                distance_m = dm
+        except ValueError:
+            pass
+
+    # トラックコード (2009)
+    track_code = _sb(b, 706, 2).strip() or None
 
     race_key = f"{yyyy}{mmdd}{course}{kai}{day}{raceno}"
     yyyymmdd = f"{yyyy}{mmdd}"
@@ -52,6 +66,8 @@ def parse_ra(payload: str):
         "race_no":         raceno,
         "grade_code":      grade_code,
         "race_name_short": race_name_short,
+        "distance_m":      distance_m,
+        "track_code":      track_code,
     }
 
 
@@ -174,6 +190,16 @@ def init_normalized_tables(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError as e:
             if "duplicate column name" not in str(e).lower():
                 raise
+    # races に新規列を追加 (冪等: 既存の場合はスキップ)
+    for col_def in [
+        "distance_m INTEGER",
+        "track_code  TEXT",
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE races ADD COLUMN {col_def}")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
     conn.commit()
 
 
@@ -203,8 +229,8 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                 """
                 INSERT INTO races
                     (race_key, yyyymmdd, course_code, kai, day, race_no,
-                     grade_code, race_name_short, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     grade_code, race_name_short, distance_m, track_code, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(race_key) DO UPDATE SET
                     yyyymmdd        = excluded.yyyymmdd,
                     course_code     = excluded.course_code,
@@ -213,6 +239,8 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                     race_no         = excluded.race_no,
                     grade_code      = excluded.grade_code,
                     race_name_short = excluded.race_name_short,
+                    distance_m      = excluded.distance_m,
+                    track_code      = excluded.track_code,
                     created_at      = excluded.created_at
                 """,
                 (
@@ -224,6 +252,8 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                     rec["race_no"],
                     rec["grade_code"],
                     rec["race_name_short"],
+                    rec["distance_m"],
+                    rec["track_code"],
                     now,
                 ),
             )
