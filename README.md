@@ -301,6 +301,9 @@ python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sampl
 
 rem 4. CSV 出力、オッズは中央値、期待値しきい値 0.05、1点 500 円、最大 5 点
 python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --format csv --odds-use mid --min-ev 0.05 --stake 500 --max-bets 5
+
+rem 5. 当たりやすさ優先: p_place 降順, 複勝確率 0.22 以上, オッズ 12 以下, min オッズ使用
+python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --rank-by p --min-p-place 0.22 --max-odds-used 12 --odds-use min
 ```
 
 ### オプション
@@ -316,6 +319,9 @@ python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sampl
 | `--min-ev`    |             | 期待値しきい値 (デフォルト: `0.0`)。これ以上の期待値の馬のみを候補とする              |
 | `--stake`     |             | 1点あたり賭け金・円 (デフォルト: `100`)                                              |
 | `--max-bets`  |             | 最大購入点数 (デフォルト: `3`)                                                       |
+| `--rank-by`   |             | ランキング基準: `ev`=期待値降順 (デフォルト) / `p`=確率降順 / `ev_then_p`=期待値→確率 |
+| `--min-p-place` |           | 複勝圏確率の下限 (デフォルト: `0.0`)。これ未満の候補は除外                           |
+| `--max-odds-used` |         | 使用オッズの上限 (デフォルト: なし)。これを超える候補は除外                           |
 
 ### 出力フィールド
 
