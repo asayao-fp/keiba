@@ -502,6 +502,9 @@ python scripts/list_races.py --db jv_data.db --days 30 --course-code 05 --course
 
 rem レース名の部分一致
 python scripts/list_races.py --db jv_data.db --days 60 --name-contains 皐月 --format keys
+
+rem place_odds が存在するレースのみ出力 (バッチ実行前のフィルタリングに便利)
+python scripts/list_races.py --db jv_data.db --days 30 --require-place-odds --format keys
 ```
 
 ### `list_races.py` → `batch_suggest_place_bets.py` パイプライン
@@ -536,4 +539,5 @@ python scripts/batch_suggest_place_bets.py `
 | `--grade-code`    | グレードコードで絞り込む (複数指定可。例: `-g C -g D`)                                        |
 | `--name-contains` | `race_name_short` の部分一致フィルタ                                                          |
 | `--course-code`   | 競馬場コードで絞り込む (複数指定可)                                                            |
+| `--require-place-odds` | `place_odds` テーブルに対応レコードが存在するレースのみ出力する                           |
 | `--format`        | 出力フォーマット: `keys`=race_keyを1行ずつ / `csv` / `json` (デフォルト: `keys`)              |

@@ -10,6 +10,7 @@ races テーブルからレースを検索して出力する。
   python scripts/list_races.py --db jv_data.db --days 30 --grade-code C --format keys
   python scripts/list_races.py --db jv_data.db --days 30 --format csv
   python scripts/list_races.py --db jv_data.db --days 30 --format json
+  python scripts/list_races.py --db jv_data.db --days 30 --require-place-odds --format keys
 """
 
 import argparse
@@ -42,6 +43,7 @@ def fetch_races(
     grade_codes: list[str] | None,
     name_contains: str | None,
     course_codes: list[str] | None,
+    require_place_odds: bool = False,
 ) -> list[dict]:
     query = """
         SELECT
@@ -77,6 +79,9 @@ def fetch_races(
         placeholders = ", ".join("?" for _ in course_codes)
         query += f"  AND course_code IN ({placeholders})\n"
         params.extend(course_codes)
+
+    if require_place_odds:
+        query += "  AND EXISTS (SELECT 1 FROM place_odds WHERE place_odds.race_key = races.race_key)\n"
 
     query += (
         "ORDER BY yyyymmdd DESC, course_code ASC, kai ASC, day ASC, race_no ASC"
@@ -162,6 +167,14 @@ def parse_args() -> argparse.Namespace:
         help="競馬場コードで絞り込む (複数指定可)",
     )
 
+    # --- オッズフィルタ ---
+    parser.add_argument(
+        "--require-place-odds",
+        action="store_true",
+        default=False,
+        help="place_odds テーブルに対応レコードが存在するレースのみ出力する",
+    )
+
     # --- 出力フォーマット ---
     parser.add_argument(
         "--format",
@@ -204,6 +217,7 @@ def main() -> None:
             grade_codes=args.grade_codes,
             name_contains=args.name_contains,
             course_codes=args.course_codes,
+            require_place_odds=args.require_place_odds,
         )
     except sqlite3.OperationalError as e:
         print(f"[ERROR] クエリ失敗: {e}", file=sys.stderr)
