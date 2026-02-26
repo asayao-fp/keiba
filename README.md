@@ -414,6 +414,13 @@ python scripts/batch_suggest_place_bets.py ^
     --race-keys 202401010102010101 202401010102010102 ^
     --db jv_data.db --model models/place_model.cbm ^
     --out-dir out/ --mode balance --min-ev 0.05
+
+rem 既存の pred_<race_key>.json を再利用して買い目提案のみ実行 (モデル不要)
+python scripts/batch_suggest_place_bets.py ^
+    --race-keys 202401010102010101 202401010102010102 ^
+    --db jv_data.db ^
+    --out-dir out/ ^
+    --skip-predict --pred-dir out/
 ```
 
 `race_keys.txt` の例:
@@ -437,6 +444,7 @@ python scripts/batch_suggest_place_bets.py ^
 | 列名                      | 説明                                              |
 |--------------------------|---------------------------------------------------|
 | `race_key`               | レースキー                                        |
+| `status`                 | 処理結果: `ok` または `failed`                    |
 | `n_bets`                 | 買い目点数                                        |
 | `total_stake`            | 合計賭け金 (円)                                   |
 | `sum_expected_value_yen` | 買い目全体の期待値合計 (円)                        |
@@ -444,6 +452,7 @@ python scripts/batch_suggest_place_bets.py ^
 | `avg_odds_used`          | 買い目馬の平均使用オッズ                           |
 | `max_p_place`            | 買い目馬の最大複勝圏確率                           |
 | `max_ev_per_1unit`       | 買い目馬の最大期待値 (1単位賭けあたり)              |
+| `error`                  | エラーメッセージ (`status=failed` の場合に設定)    |
 
 ### オプション
 
@@ -464,3 +473,5 @@ python scripts/batch_suggest_place_bets.py ^
 | `--stake`          |                         | 1点あたり賭け金・円 (デフォルト: `100`)                                 |
 | `--max-bets`       |                         | 最大購入点数 (デフォルト: `3`)                                          |
 | `--fail-fast`      |                         | エラー発生時に即座に終了する (デフォルト: 他レースは続行)                |
+| `--skip-predict`   |                         | 予測をスキップし、既存の `pred_<race_key>.json` を再利用する (モデル不要) |
+| `--pred-dir`       |                         | `--skip-predict` 時に pred JSON を読み込むディレクトリ (デフォルト: `--out-dir` と同じ) |

@@ -12,6 +12,12 @@ batch_suggest_place_bets.py
       --race-keys-file race_keys.txt \\
       --db jv_data.db --model models/place_model.cbm --out-dir out/ \\
       --summary-csv out/summary.csv
+
+  # 既存の pred_<race_key>.json を再利用して買い目提案のみ実行 (モデル不要)
+  python scripts/batch_suggest_place_bets.py \\
+      --race-keys 202401010102010101 202401010102010102 \\
+      --db jv_data.db --out-dir out/ \\
+      --skip-predict --pred-dir out/
 """
 
 import argparse
@@ -41,6 +47,7 @@ DEFAULT_MODEL_PATH = "models/place_model.cbm"
 
 SUMMARY_FIELDS = [
     "race_key",
+    "status",
     "n_bets",
     "total_stake",
     "sum_expected_value_yen",
@@ -48,6 +55,7 @@ SUMMARY_FIELDS = [
     "avg_odds_used",
     "max_p_place",
     "max_ev_per_1unit",
+    "error",
 ]
 
 
@@ -161,6 +169,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="いずれかのレースでエラーが発生した際に即座に終了する (デフォルト: 他レースは続行)",
     )
+    parser.add_argument(
+        "--skip-predict",
+        action="store_true",
+        help="予測ステップをスキップし、既存の pred_<race_key>.json を再利用する (モデル不要)",
+    )
+    parser.add_argument(
+        "--pred-dir",
+        default=None,
+        metavar="PATH",
+        help="--skip-predict 時に pred_<race_key>.json を読み込むディレクトリ"
+        " (デフォルト: --out-dir と同じ)",
+    )
 
     return parser.parse_args()
 
@@ -203,6 +223,7 @@ def _summarize_bets(race_key: str, bets: list[dict]) -> dict:
     if n == 0:
         return {
             "race_key": race_key,
+            "status": "ok",
             "n_bets": 0,
             "total_stake": 0,
             "sum_expected_value_yen": 0.0,
@@ -210,9 +231,11 @@ def _summarize_bets(race_key: str, bets: list[dict]) -> dict:
             "avg_odds_used": None,
             "max_p_place": None,
             "max_ev_per_1unit": None,
+            "error": "",
         }
     return {
         "race_key": race_key,
+        "status": "ok",
         "n_bets": n,
         "total_stake": sum(b["stake"] for b in bets),
         "sum_expected_value_yen": round(sum(b["expected_value_yen"] for b in bets), 2),
@@ -220,6 +243,7 @@ def _summarize_bets(race_key: str, bets: list[dict]) -> dict:
         "avg_odds_used": round(sum(b["place_odds_used"] for b in bets) / n, 4),
         "max_p_place": round(max(b["p_place"] for b in bets), 4),
         "max_ev_per_1unit": round(max(b["ev_per_1unit"] for b in bets), 4),
+        "error": "",
     }
 
 
@@ -256,6 +280,9 @@ def main() -> None:
     os.makedirs(args.out_dir, exist_ok=True)
     summary_csv_path = args.summary_csv or os.path.join(args.out_dir, "summary.csv")
 
+    # --skip-predict 時の pred ディレクトリ (デフォルトは out_dir と同じ)
+    pred_dir = args.pred_dir or args.out_dir
+
     # --- --mode balance プリセットを適用 ---
     if args.mode == "balance":
         if args.rank_by is None:
@@ -271,13 +298,15 @@ def main() -> None:
     if args.min_p_place is None:
         args.min_p_place = 0.0
 
-    # --- モデルを一度だけ読み込む ---
-    try:
-        model = CatBoostClassifier()
-        model.load_model(args.model)
-    except Exception as e:
-        print(f"[ERROR] モデル読み込み失敗: {e}", file=sys.stderr)
-        sys.exit(1)
+    # --- モデルを一度だけ読み込む (--skip-predict 時はスキップ) ---
+    model = None
+    if not args.skip_predict:
+        try:
+            model = CatBoostClassifier()
+            model.load_model(args.model)
+        except Exception as e:
+            print(f"[ERROR] モデル読み込み失敗: {e}", file=sys.stderr)
+            sys.exit(1)
 
     # --- DB に一度だけ接続する ---
     try:
@@ -293,11 +322,22 @@ def main() -> None:
         for race_key in race_keys:
             print(f"[INFO] race_key={race_key}", file=sys.stderr)
             try:
-                # 1. 予測
-                pred = _predict_for_race(conn, race_key, model)
-                pred_path = os.path.join(args.out_dir, f"pred_{race_key}.json")
-                with open(pred_path, "w", encoding="utf-8") as fh:
-                    json.dump(pred, fh, ensure_ascii=False, indent=2)
+                if args.skip_predict:
+                    # 1. 既存の pred JSON を読み込む
+                    pred_path = os.path.join(pred_dir, f"pred_{race_key}.json")
+                    if not os.path.exists(pred_path):
+                        raise FileNotFoundError(
+                            f"pred ファイルが見つかりません: {pred_path}"
+                        )
+                    with open(pred_path, encoding="utf-8") as fh:
+                        pred = json.load(fh)
+                else:
+                    # 1. 予測
+                    assert model is not None, "モデルが読み込まれていません"
+                    pred = _predict_for_race(conn, race_key, model)
+                    pred_path = os.path.join(args.out_dir, f"pred_{race_key}.json")
+                    with open(pred_path, "w", encoding="utf-8") as fh:
+                        json.dump(pred, fh, ensure_ascii=False, indent=2)
 
                 # 2. オッズを DB から取得
                 odds_map = load_odds_db(args.db, race_key)
@@ -327,6 +367,20 @@ def main() -> None:
                     file=sys.stderr,
                 )
                 failed.append(race_key)
+                summary_rows.append(
+                    {
+                        "race_key": race_key,
+                        "status": "failed",
+                        "n_bets": 0,
+                        "total_stake": 0,
+                        "sum_expected_value_yen": 0.0,
+                        "avg_p_place": None,
+                        "avg_odds_used": None,
+                        "max_p_place": None,
+                        "max_ev_per_1unit": None,
+                        "error": str(e),
+                    }
+                )
                 if args.fail_fast:
                     break
     finally:
