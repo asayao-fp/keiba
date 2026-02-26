@@ -81,7 +81,14 @@ def fetch_races(
         params.extend(course_codes)
 
     if require_place_odds:
-        query += "  AND EXISTS (SELECT 1 FROM place_odds WHERE place_odds.race_key = races.race_key)\n"
+        query += (
+            "  AND EXISTS ("
+            "SELECT 1 FROM place_odds"
+            " WHERE place_odds.race_key = races.race_key"
+            " AND place_odds.place_odds_min IS NOT NULL"
+            " AND place_odds.place_odds_max IS NOT NULL"
+            ")\n"
+        )
 
     query += (
         "ORDER BY yyyymmdd DESC, course_code ASC, kai ASC, day ASC, race_no ASC"
@@ -172,7 +179,7 @@ def parse_args() -> argparse.Namespace:
         "--require-place-odds",
         action="store_true",
         default=False,
-        help="place_odds テーブルに対応レコードが存在するレースのみ出力する",
+        help="place_odds テーブルに place_odds_min と place_odds_max が NULL でないレコードが存在するレースのみ出力する",
     )
 
     # --- 出力フォーマット ---

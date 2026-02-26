@@ -240,8 +240,10 @@ def load_odds_db(db_path: str, race_key: str) -> dict[str, dict]:
             " FROM place_odds WHERE race_key = ?",
             (race_key,),
         )
+        rows = cursor.fetchall()
+        total_rows = len(rows)
         odds_map: dict[str, dict] = {}
-        for horse_no, odds_min, odds_max in cursor:
+        for horse_no, odds_min, odds_max in rows:
             if odds_min is None or odds_max is None:
                 continue
             odds_map[_norm_horse_no(horse_no)] = {
@@ -250,10 +252,19 @@ def load_odds_db(db_path: str, race_key: str) -> dict[str, dict]:
             }
 
     if not odds_map:
-        print(
-            f"[WARN] DB の place_odds テーブルに race_key={race_key} のデータがありません。",
-            file=sys.stderr,
-        )
+        if total_rows == 0:
+            print(
+                f"[WARN] DB の place_odds テーブルに race_key={race_key} のデータがありません"
+                f" (total_rows=0, usable_rows=0)。",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[WARN] DB の place_odds テーブルに race_key={race_key} の使用可能なデータがありません"
+                f" (total_rows={total_rows}, usable_rows=0)。"
+                f" place_odds_min または place_odds_max がすべて NULL です。",
+                file=sys.stderr,
+            )
 
     return odds_map
 
