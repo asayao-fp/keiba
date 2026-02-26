@@ -55,6 +55,7 @@ SUMMARY_FIELDS = [
     "avg_odds_used",
     "max_p_place",
     "max_ev_per_1unit",
+    "fallback_used",
     "error",
 ]
 
@@ -217,7 +218,7 @@ def _predict_for_race(
     return results
 
 
-def _summarize_bets(race_key: str, bets: list[dict]) -> dict:
+def _summarize_bets(race_key: str, bets: list[dict], *, fallback_used: bool = False) -> dict:
     """bets リストから summary.csv の1行を生成する。"""
     n = len(bets)
     if n == 0:
@@ -231,6 +232,7 @@ def _summarize_bets(race_key: str, bets: list[dict]) -> dict:
             "avg_odds_used": None,
             "max_p_place": None,
             "max_ev_per_1unit": None,
+            "fallback_used": False,
             "error": "",
         }
     return {
@@ -243,6 +245,7 @@ def _summarize_bets(race_key: str, bets: list[dict]) -> dict:
         "avg_odds_used": round(sum(b["place_odds_used"] for b in bets) / n, 4),
         "max_p_place": round(max(b["p_place"] for b in bets), 4),
         "max_ev_per_1unit": round(max(b["ev_per_1unit"] for b in bets), 4),
+        "fallback_used": fallback_used,
         "error": "",
     }
 
@@ -375,12 +378,33 @@ def main() -> None:
                     min_p_place=args.min_p_place,
                     max_odds_used=args.max_odds_used,
                 )
+                fallback_used = False
+                if not bets:
+                    # フォールバック: EV 制約を解除し、p_place 最大の1頭を選ぶ
+                    bets = compute_bets(
+                        pred,
+                        odds_map,
+                        odds_use=args.odds_use,
+                        min_ev=-1e9,
+                        stake=args.stake,
+                        max_bets=1,
+                        rank_by="p",
+                        min_p_place=args.min_p_place,
+                        max_odds_used=args.max_odds_used,
+                    )
+                    if bets:
+                        fallback_used = True
+                        print(
+                            f"[INFO] race_key={race_key}: フォールバック適用"
+                            f" - horse_no={bets[0]['horse_no']} (p_place={bets[0]['p_place']})",
+                            file=sys.stderr,
+                        )
                 bets_path = os.path.join(args.out_dir, f"bets_{race_key}.json")
                 with open(bets_path, "w", encoding="utf-8") as fh:
                     json.dump(bets, fh, ensure_ascii=False, indent=2)
 
                 # 4. 集計行を追加
-                summary_rows.append(_summarize_bets(race_key, bets))
+                summary_rows.append(_summarize_bets(race_key, bets, fallback_used=fallback_used))
 
             except Exception as e:
                 print(
@@ -399,6 +423,7 @@ def main() -> None:
                         "avg_odds_used": None,
                         "max_p_place": None,
                         "max_ev_per_1unit": None,
+                        "fallback_used": False,
                         "error": str(e),
                     }
                 )
