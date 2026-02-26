@@ -304,6 +304,12 @@ python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sampl
 
 rem 5. 当たりやすさ優先: p_place 降順, 複勝確率 0.22 以上, オッズ 12 以下, min オッズ使用
 python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --rank-by p --min-p-place 0.22 --max-odds-used 12 --odds-use min
+
+rem 6. 収益性を維持しつつ当たりやすさにも配慮 (balance プリセット)
+python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --mode balance
+
+rem    balance プリセットと同等の明示的な指定
+python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sample_place_odds.csv --rank-by ev_then_p --min-p-place 0.20 --max-odds-used 15 --min-ev 0
 ```
 
 ### オプション
@@ -320,8 +326,9 @@ python scripts/suggest_place_bets.py --pred-json pred.json --odds-csv data/sampl
 | `--stake`     |             | 1点あたり賭け金・円 (デフォルト: `100`)                                              |
 | `--max-bets`  |             | 最大購入点数 (デフォルト: `3`)                                                       |
 | `--rank-by`   |             | ランキング基準: `ev`=期待値降順 (デフォルト) / `p`=確率降順 / `ev_then_p`=期待値→確率 |
-| `--min-p-place` |           | 複勝圏確率の下限 (デフォルト: `0.0`)。これ未満の候補は除外                           |
-| `--max-odds-used` |         | 使用オッズの上限 (デフォルト: なし)。これを超える候補は除外                           |
+| `--min-p-place` |           | 複勝圏確率の下限 (デフォルト: `0.0`、balance モード時: `0.20`)。これ未満の候補は除外  |
+| `--max-odds-used` |         | 使用オッズの上限 (デフォルト: なし、balance モード時: `15`)。これを超える候補は除外   |
+| `--mode`      |             | 運用プリセット: `balance`=収益性を維持しつつ当たりやすさにも配慮。明示指定した引数は優先 |
 
 ### 出力フィールド
 
