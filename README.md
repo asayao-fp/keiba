@@ -539,5 +539,5 @@ python scripts/batch_suggest_place_bets.py `
 | `--grade-code`    | グレードコードで絞り込む (複数指定可。例: `-g C -g D`)                                        |
 | `--name-contains` | `race_name_short` の部分一致フィルタ                                                          |
 | `--course-code`   | 競馬場コードで絞り込む (複数指定可)                                                            |
-| `--require-place-odds` | `place_odds` テーブルに対応レコードが存在するレースのみ出力する                           |
+| `--require-place-odds` | `place_odds` テーブルに `place_odds_min` および `place_odds_max` が NULL でないレコードが存在するレースのみ出力する (NULL のみのレコードは除外) |
 | `--format`        | 出力フォーマット: `keys`=race_keyを1行ずつ / `csv` / `json` (デフォルト: `keys`)              |
