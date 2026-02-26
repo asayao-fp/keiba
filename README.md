@@ -475,3 +475,65 @@ python scripts/batch_suggest_place_bets.py ^
 | `--fail-fast`      |                         | エラー発生時に即座に終了する (デフォルト: 他レースは続行)                |
 | `--skip-predict`   |                         | 予測をスキップし、既存の `pred_<race_key>.json` を再利用する (モデル不要) |
 | `--pred-dir`       |                         | `--skip-predict` 時に pred JSON を読み込むディレクトリ (デフォルト: `--out-dir` と同じ) |
+
+---
+
+## 直近の重賞レース一覧 (`list_races.py`)
+
+`list_races.py` を使うと、`races` テーブルから日付・グレード・競馬場などの条件でレースを絞り込み、`race_key` 一覧や CSV/JSON 形式で出力できます。出力した `race_key` をそのまま `batch_suggest_place_bets.py` に渡すことで、直近の重賞レースを簡単に一括処理できます。
+
+### 実行例
+
+```bat
+rem 直近30日の重賞レース (grade_code=C) の race_key を1行ずつ出力
+python scripts/list_races.py --db jv_data.db --days 30 --grade-code C --format keys
+
+rem 複数グレードを指定
+python scripts/list_races.py --db jv_data.db --days 30 --grade-code C --grade-code D --format keys
+
+rem 期間指定 + CSV 形式で出力
+python scripts/list_races.py --db jv_data.db --from 20240101 --to 20241231 --grade-code C --format csv
+
+rem JSON 形式で出力
+python scripts/list_races.py --db jv_data.db --days 14 --format json
+
+rem 競馬場コードで絞り込む (05=東京, 06=中山)
+python scripts/list_races.py --db jv_data.db --days 30 --course-code 05 --course-code 06 --format keys
+
+rem レース名の部分一致
+python scripts/list_races.py --db jv_data.db --days 60 --name-contains 皐月 --format keys
+```
+
+### `list_races.py` → `batch_suggest_place_bets.py` パイプライン
+
+```bat
+rem (bat/cmd) race_key 一覧をファイルに保存してからバッチ実行
+python scripts/list_races.py --db jv_data.db --days 30 --grade-code C --format keys > race_keys.txt
+python scripts/batch_suggest_place_bets.py ^
+    --race-keys-file race_keys.txt ^
+    --db jv_data.db --model models/place_model.cbm ^
+    --out-dir out/ --summary-csv out/summary.csv
+```
+
+```powershell
+# (PowerShell) race_key 一覧をファイルに保存してからバッチ実行
+python scripts/list_races.py --db jv_data.db --days 30 --grade-code C --format keys |
+    Out-File -Encoding utf8NoBOM race_keys.txt
+python scripts/batch_suggest_place_bets.py `
+    --race-keys-file race_keys.txt `
+    --db jv_data.db --model models/place_model.cbm `
+    --out-dir out/ --summary-csv out/summary.csv
+```
+
+### オプション
+
+| オプション          | 説明                                                                                         |
+|-------------------|----------------------------------------------------------------------------------------------|
+| `--db`            | SQLite DB ファイルパス (デフォルト: `jv_data.db`)                                             |
+| `--days N`        | 今日から遡る日数 (例: `--days 30` → 直近30日)。`--from` と同時指定不可                        |
+| `--from YYYYMMDD` | 検索開始日。`--days` と同時指定不可                                                           |
+| `--to YYYYMMDD`   | 検索終了日 (省略時: 制限なし)。`--from` と組み合わせて使用                                     |
+| `--grade-code`    | グレードコードで絞り込む (複数指定可。例: `-g C -g D`)                                        |
+| `--name-contains` | `race_name_short` の部分一致フィルタ                                                          |
+| `--course-code`   | 競馬場コードで絞り込む (複数指定可)                                                            |
+| `--format`        | 出力フォーマット: `keys`=race_keyを1行ずつ / `csv` / `json` (デフォルト: `keys`)              |
