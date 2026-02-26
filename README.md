@@ -541,3 +541,72 @@ python scripts/batch_suggest_place_bets.py `
 | `--course-code`   | 競馬場コードで絞り込む (複数指定可)                                                            |
 | `--require-place-odds` | `place_odds` テーブルに `place_odds_min` および `place_odds_max` が NULL でないレコードが存在するレースのみ出力する (NULL のみのレコードは除外) |
 | `--format`        | 出力フォーマット: `keys`=race_keyを1行ずつ / `csv` / `json` (デフォルト: `keys`)              |
+
+---
+
+## 自動化ワークフロー (前日準備 + 当日複数回更新)
+
+`update_db_from_raw.py` と `make_today_race_keys.py` を組み合わせることで、**前日夜の準備** と **当日の差分更新** を少ないコマンドで実現できます。
+
+### スクリプト概要
+
+| スクリプト | 説明 |
+|---|---|
+| `update_db_from_raw.py` | `raw_jv_records` から `races` / `entries` / `jockeys` / `trainers` / `place_odds` テーブルを再構築する (冪等) |
+| `make_today_race_keys.py` | 指定日 (デフォルト: 今日) の重賞レース `race_key` を生成してファイルまたは標準出力に書き出す |
+
+### 推奨ワークフロー
+
+#### 前日夜 (night-before prep)
+
+```powershell
+# 1. JV-Link から最新の生データを取得 (RACE + ODDS DataSpec)
+python scripts/jv_ingest_raw.py --from-date 20240101 --dataspec RACE,ODDS --db jv_data.db
+
+# 2. 派生テーブルを一括更新 (races / entries / masters / place_odds)
+python scripts/update_db_from_raw.py --db jv_data.db
+
+# 3. 今日の重賞レースキーを生成してファイルに保存
+python scripts/make_today_race_keys.py --db jv_data.db --out race_keys.txt
+
+# 4. 買い目提案を一括実行
+python scripts/batch_suggest_place_bets.py `
+    --race-keys-file race_keys.txt `
+    --db jv_data.db --model models/place_model.cbm `
+    --out-dir out/ --summary-csv out/summary.csv
+```
+
+#### 当日の差分更新 (intraday refresh)
+
+```powershell
+# 1. 最新オッズのみ再取得・再構築 (ODDS DataSpec のみ)
+python scripts/jv_ingest_raw.py --from-date 20240101 --dataspec ODDS --db jv_data.db
+python scripts/update_db_from_raw.py --db jv_data.db --skip-masters
+
+# 2. オッズ必須フィルタで今日のレースキーを再生成
+python scripts/make_today_race_keys.py --db jv_data.db --require-place-odds --out race_keys.txt
+
+# 3. 買い目提案を再実行
+python scripts/batch_suggest_place_bets.py `
+    --race-keys-file race_keys.txt `
+    --db jv_data.db --model models/place_model.cbm `
+    --out-dir out/ --summary-csv out/summary.csv
+```
+
+### `update_db_from_raw.py` オプション
+
+| オプション | 説明 |
+|---|---|
+| `--db` | SQLite DB ファイルパス (デフォルト: `jv_data.db`) |
+| `--skip-masters` | `jockeys` / `trainers` マスタテーブルの更新をスキップする |
+| `--skip-place-odds` | `place_odds` テーブルの更新をスキップする |
+
+### `make_today_race_keys.py` オプション
+
+| オプション | 説明 |
+|---|---|
+| `--db` | SQLite DB ファイルパス (デフォルト: `jv_data.db`) |
+| `--date YYYYMMDD` | 対象日 (デフォルト: 今日のローカル日付) |
+| `--grade-codes CODE ...` | グレードコードで絞り込む (デフォルト: `A B C`) |
+| `--require-place-odds` | `place_odds` に `place_odds_min` / `place_odds_max` が NULL でないレコードが存在するレースのみ出力する |
+| `--out FILE` | 出力ファイルパス (省略時: 標準出力) |
