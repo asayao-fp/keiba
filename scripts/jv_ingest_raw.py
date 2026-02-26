@@ -76,25 +76,31 @@ def jv_open(jvlink, dataspec: str, from_date: str, data_option: int):
     """
     JVOpen を呼び出す。
 
+    pywin32 の Dispatch (遅延バインディング) では COM の [out] パラメータは IN 引数として渡さず、
+    戻り値タプル (rc, read_count, download_count, last_file_timestamp) から取得する。
+    型ライブラリキャッシュ環境によっては全引数を要求する場合があるため、
+    まず 3 引数 (IN のみ) で呼び出し、失敗した場合はダミーの OUT 引数を付けてフォールバックする。
+
     Returns:
         (rc, read_count, download_count, last_file_timestamp)
     """
-    read_count = 0
-    download_count = 0
-    last_file_timestamp = ""
+    try:
+        result = jvlink.JVOpen(dataspec, from_date, data_option)
+    except Exception as e:
+        # 型ライブラリキャッシュ環境では全引数 (IN + OUT) を要求する場合がある
+        print(f"[DEBUG] JVOpen (3引数) が失敗 ({e})。6引数フォールバックを試みます ...")
+        result = jvlink.JVOpen(dataspec, from_date, data_option, 0, 0, "")
 
-    rc = jvlink.JVOpen(
-        dataspec,
-        from_date,
-        data_option,
-        read_count,
-        download_count,
-        last_file_timestamp,
-    )
-    # JVOpen は OUT パラメータを返さない場合があるため、
-    # pywin32 の戻り値は (rc, read_count, download_count, last_file_timestamp) のタプルになることがある。
-    if isinstance(rc, (tuple, list)):
-        rc, read_count, download_count, last_file_timestamp = rc
+    if isinstance(result, (tuple, list)):
+        rc = result[0]
+        read_count = int(result[1]) if len(result) > 1 else 0
+        download_count = int(result[2]) if len(result) > 2 else 0
+        last_file_timestamp = result[3] if len(result) > 3 else ""
+    else:
+        rc = result
+        read_count = 0
+        download_count = 0
+        last_file_timestamp = ""
     return rc, read_count, download_count, last_file_timestamp
 
 
@@ -181,8 +187,14 @@ def ingest(
     data_option: int,
     db_path: str,
     sid: str,
-) -> None:
-    """メイン処理: JV-Link から取得して SQLite に保存する。"""
+    allow_no_data: bool = False,
+) -> bool:
+    """
+    メイン処理: JV-Link から取得して SQLite に保存する。
+
+    Returns:
+        True if all DataSpecs succeeded (or only -111 with allow_no_data), False on error.
+    """
     conn = init_db(db_path)
 
     jvlink = win32com.client.Dispatch("JVDTLab.JVLink")
@@ -195,8 +207,10 @@ def ingest(
     if rc != 0:
         print(f"[ERROR] JVInit エラー: {rc}")
         conn.close()
-        return
+        return False
     print(f"[INFO] JVInit 成功")
+
+    has_error = False
 
     for dataspec in dataspecs:
         dataspec = dataspec.strip()
@@ -210,11 +224,23 @@ def ingest(
 
         if rc != RC_JVOPEN_OK:
             print(f"[ERROR] JVOpen エラー (DataSpec={dataspec}): {rc}")
+            skip_as_no_data = False
             if rc == -1:
                 print(
                     f"[HINT]  JVOpen -1 の主な原因: 契約・提供対象外の DataSpec / FromDate 形式不正 / "
                     f"DIFF など差分系は提供範囲外の場合あり"
                 )
+            elif rc == -111:
+                print(
+                    f"[HINT]  JVOpen -111 の主な原因: 当該 DataSpec のデータが現時点で提供されていない / "
+                    f"サービス対象外 / 無効な DataSpec。"
+                    f"オッズ系 (O1 等) はレース当日以外はデータが存在しない場合があります。"
+                )
+                if allow_no_data:
+                    print(f"[WARN]  --allow-no-data が指定されているため、DataSpec={dataspec} をスキップして続行します。")
+                    skip_as_no_data = True
+            if not skip_as_no_data:
+                has_error = True
             jvlink.JVClose()
             continue
 
@@ -240,6 +266,7 @@ def ingest(
 
     conn.close()
     print(f"\n[INFO] 完了。DB: {db_path}")
+    return not has_error
 
 
 def parse_args():
@@ -277,6 +304,13 @@ def parse_args():
         metavar="SID",
         help="JVInit に渡すサービスID (デフォルト: UNKNOWN。空文字で -101 が返る環境では UNKNOWN が必要)",
     )
+    parser.add_argument(
+        "--allow-no-data",
+        action="store_true",
+        default=False,
+        help="JVOpen が -111 (データなし) を返した場合をエラーとして扱わず警告のみ表示して続行する。"
+             "定期実行でオッズ等のデータが存在しない時間帯にも終了コード 0 で完了させたい場合に使用する。",
+    )
     return parser.parse_args()
 
 
@@ -308,13 +342,16 @@ def main():
     print(f"  DataOption  : {args.data_option}")
     print(f"  DB          : {args.db}")
 
-    ingest(
+    ok = ingest(
         dataspecs=dataspecs,
         from_date=from_date,
         data_option=args.data_option,
         db_path=args.db,
         sid=args.sid,
+        allow_no_data=args.allow_no_data,
     )
+    if not ok:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -35,16 +35,25 @@ python scripts/jv_ingest_raw.py --from-date 20240101000000 --dataspec RACE --dat
 
 | オプション        | 必須 | 説明                                                                  |
 |-----------------|------|-----------------------------------------------------------------------|
-| `--from-date`   | ✓    | データ提供開始日時。`YYYYMMDD` または `YYYYMMDD000000` 形式             |
-| `--dataspec`    | ✓    | DataSpec をカンマ区切りで指定。例: `RACE` / `RACE,TOKU`               |
-| `--data-option` |      | 1=通常データ (デフォルト), 2=今週データ, 3=セットアップデータ           |
-| `--db`          |      | SQLite DB ファイルパス (デフォルト: `jv_data.db`)                      |
-| `--sid`         |      | JVInit に渡すサービスID (デフォルト: `UNKNOWN`。空文字で -101 が返る環境では `UNKNOWN` が必要) |
+| `--from-date`     | ✓    | データ提供開始日時。`YYYYMMDD` または `YYYYMMDD000000` 形式             |
+| `--dataspec`      | ✓    | DataSpec をカンマ区切りで指定。例: `RACE` / `RACE,TOKU`               |
+| `--data-option`   |      | 1=通常データ (デフォルト), 2=今週データ, 3=セットアップデータ           |
+| `--db`            |      | SQLite DB ファイルパス (デフォルト: `jv_data.db`)                      |
+| `--sid`           |      | JVInit に渡すサービスID (デフォルト: `UNKNOWN`。空文字で -101 が返る環境では `UNKNOWN` が必要) |
+| `--allow-no-data` |      | `JVOpen` が `-111` (データなし) を返した場合をエラーとして扱わず警告のみ表示して続行する。定期実行でオッズ等のデータが存在しない時間帯にも終了コード 0 で完了させたい場合に使用する。 |
 
-利用可能な DataSpec: `TOKU`, `RACE`, `DIFF`, `BLOD`, `SNAP`, `SLOP`, `WOOD`, `YSCH`, `HOSE`, `HOYU`, `COMM`, `MING`
+利用可能な DataSpec: `TOKU`, `RACE`, `DIFF`, `BLOD`, `SNAP`, `SLOP`, `WOOD`, `YSCH`, `HOSE`, `HOYU`, `COMM`, `MING`, `ODDS` (O1 オッズ)
 
 > **注意**: `DIFF` など差分系の DataSpec は、契約プランや提供対象範囲によっては `JVOpen` が `-1` で失敗することがあります。
 > その場合、該当 DataSpec はスキップされ、他の DataSpec の処理は継続されます。
+
+> **ODDS / O1 について**: オッズ系 DataSpec (`ODDS` / `O1`) は、レース当日・発走前後などの限られた時間帯のみデータが提供されます。
+> データが存在しない時間帯に実行すると `JVOpen` が `-111` を返します。
+> 定期実行スクリプトではデータなしを非致命的として扱いたい場合は `--allow-no-data` フラグを追加してください:
+>
+> ```bat
+> python scripts/jv_ingest_raw.py --from-date 20260222 --dataspec O1 --db jv_data.db --allow-no-data
+> ```
 
 ### トラブルシューティング
 
@@ -52,6 +61,7 @@ python scripts/jv_ingest_raw.py --from-date 20240101000000 --dataspec RACE --dat
 |------|------|
 | `JVInit` が `-101` で失敗する | `--sid ""` のように空文字を渡していた場合は引数を省略するか `--sid UNKNOWN` を指定してください (デフォルトは `UNKNOWN`) |
 | `JVOpen` が `-1` で失敗する | 契約・提供対象外の DataSpec の可能性があります。`--dataspec` から該当 DataSpec を除外してください |
+| `JVOpen` が `-111` で失敗する (ODDS/O1 など) | データが現時点で提供されていません。オッズ系はレース当日のみ取得可能です。定期実行では `--allow-no-data` を付けて非致命的エラーとして扱ってください |
 | `build_tables_from_raw.py` で `MemoryError` が発生する | `build_tables_from_raw.py` はストリーミング処理 (カーソルイテレーション) を採用しており、全件を一度にメモリに読み込まないため MemoryError は発生しません。旧バージョンをお使いの場合は最新版に更新してください。 |
 
 ### 保存先 SQLite テーブル
@@ -580,7 +590,8 @@ python scripts/batch_suggest_place_bets.py `
 
 ```powershell
 # 1. 最新オッズのみ再取得・再構築 (ODDS DataSpec のみ)
-python scripts/jv_ingest_raw.py --from-date 20240101 --dataspec ODDS --db jv_data.db
+# --allow-no-data: レース前後などオッズが提供されていない時間帯でも終了コード 0 で続行する
+python scripts/jv_ingest_raw.py --from-date 20240101 --dataspec ODDS --db jv_data.db --allow-no-data
 python scripts/update_db_from_raw.py --db jv_data.db --skip-masters
 
 # 2. オッズ必須フィルタで今日のレースキーを再生成
