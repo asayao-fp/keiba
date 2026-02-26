@@ -254,17 +254,38 @@ def main() -> None:
     race_keys: list[str] = list(args.race_keys) if args.race_keys else []
     if args.race_keys_file:
         try:
-            with open(args.race_keys_file, encoding="utf-8") as fh:
-                for line in fh:
-                    key = line.strip()
-                    if key:
-                        race_keys.append(key)
+            with open(args.race_keys_file, "rb") as fh:
+                raw = fh.read()
         except FileNotFoundError:
             print(
                 f"[ERROR] レースキーファイルが見つかりません: {args.race_keys_file}",
                 file=sys.stderr,
             )
             sys.exit(1)
+
+        # Encoding detection: utf-8-sig strips UTF-8 BOM, utf-16 handles UTF-16 LE/BE BOM
+        for enc in ("utf-8-sig", "utf-16", "utf-8"):
+            try:
+                text = raw.decode(enc)
+                break
+            except (UnicodeDecodeError, ValueError):
+                continue
+        else:
+            print(
+                f"[ERROR] レースキーファイルのデコードに失敗しました: {args.race_keys_file}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            key = line.strip().lstrip("\ufeff")
+            if not key or key.startswith("#"):
+                print(
+                    f"[DEBUG] レースキーファイル行 {lineno} をスキップしました: {line!r}",
+                    file=sys.stderr,
+                )
+                continue
+            race_keys.append(key)
 
     if not race_keys:
         print(
