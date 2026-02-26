@@ -386,3 +386,81 @@ python scripts/suggest_place_bets.py --pred-json pred.json --db jv_data.db --rac
 | place_odds_max | REAL    | 複勝オッズ 最大値 (4桁整数÷10)              |
 | announced_at   | TEXT    | 発表日時 (yyyy + mmddHHMM)                  |
 | updated_at     | TEXT    | 処理日時 (ISO 8601)                         |
+
+---
+
+## 複数レース一括買い目提案
+
+`batch_suggest_place_bets.py` を使うと、複数レースの予測・買い目提案を一括で処理し、集計 CSV を出力できます。
+オッズは DB (`place_odds` テーブル) から自動取得します。
+
+### 実行例
+
+```bat
+rem 2レースをスペース区切りで指定
+python scripts/batch_suggest_place_bets.py ^
+    --race-keys 202401010102010101 202401010102010102 ^
+    --db jv_data.db --model models/place_model.cbm ^
+    --out-dir out/
+
+rem レースキーをファイルで指定 (race_keys.txt: 1行1キー)
+python scripts/batch_suggest_place_bets.py ^
+    --race-keys-file race_keys.txt ^
+    --db jv_data.db --model models/place_model.cbm ^
+    --out-dir out/ --summary-csv out/summary.csv
+
+rem balance プリセット + 期待値しきい値 0.05 を適用
+python scripts/batch_suggest_place_bets.py ^
+    --race-keys 202401010102010101 202401010102010102 ^
+    --db jv_data.db --model models/place_model.cbm ^
+    --out-dir out/ --mode balance --min-ev 0.05
+```
+
+`race_keys.txt` の例:
+
+```
+202401010102010101
+202401010102010102
+202401010103010101
+```
+
+### 出力ファイル
+
+| ファイル                    | 説明                                         |
+|---------------------------|----------------------------------------------|
+| `pred_<race_key>.json`    | 各レースの複勝圏確率 (馬ごとのリスト)          |
+| `bets_<race_key>.json`    | 各レースの買い目候補リスト                     |
+| `summary.csv`             | 全レース集計 (デフォルト: `<out-dir>/summary.csv`) |
+
+### `summary.csv` 列
+
+| 列名                      | 説明                                              |
+|--------------------------|---------------------------------------------------|
+| `race_key`               | レースキー                                        |
+| `n_bets`                 | 買い目点数                                        |
+| `total_stake`            | 合計賭け金 (円)                                   |
+| `sum_expected_value_yen` | 買い目全体の期待値合計 (円)                        |
+| `avg_p_place`            | 買い目馬の平均複勝圏確率                           |
+| `avg_odds_used`          | 買い目馬の平均使用オッズ                           |
+| `max_p_place`            | 買い目馬の最大複勝圏確率                           |
+| `max_ev_per_1unit`       | 買い目馬の最大期待値 (1単位賭けあたり)              |
+
+### オプション
+
+| オプション           | 必須                    | 説明                                                                   |
+|--------------------|-------------------------|------------------------------------------------------------------------|
+| `--race-keys`      | ※どちらか一方           | レースキー (スペース区切りで複数)                                        |
+| `--race-keys-file` | ※どちらか一方           | レースキーを1行1件で記載したテキストファイル                             |
+| `--db`             |                         | SQLite DB ファイルパス (デフォルト: `jv_data.db`)                       |
+| `--model`          |                         | 学習済みモデルパス (デフォルト: `models/place_model.cbm`)               |
+| `--out-dir`        | ✓                       | 出力ディレクトリ                                                        |
+| `--summary-csv`    |                         | 集計CSVパス (デフォルト: `<out-dir>/summary.csv`)                       |
+| `--mode`           |                         | 運用プリセット: `balance` (`suggest_place_bets.py` と同等)              |
+| `--rank-by`        |                         | ランキング基準: `ev` / `p` / `ev_then_p` (デフォルト: `ev`)             |
+| `--min-p-place`    |                         | 複勝圏確率の下限しきい値 (デフォルト: `0.0`)                            |
+| `--max-odds-used`  |                         | 使用オッズの上限 (デフォルト: なし)                                     |
+| `--min-ev`         |                         | 期待値しきい値 (デフォルト: `0.0`)                                      |
+| `--odds-use`       |                         | 使用するオッズ: `min` / `max` / `mid` (デフォルト: `min`)               |
+| `--stake`          |                         | 1点あたり賭け金・円 (デフォルト: `100`)                                 |
+| `--max-bets`       |                         | 最大購入点数 (デフォルト: `3`)                                          |
+| `--fail-fast`      |                         | エラー発生時に即座に終了する (デフォルト: 他レースは続行)                |
