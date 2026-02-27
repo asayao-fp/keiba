@@ -3,3 +3,4 @@ __pycache__/
 *.pyo
 *.db
 catboost_info/
+.keiba_gui_config.json
