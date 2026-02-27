@@ -2,3 +2,4 @@ pywin32
 catboost
 pandas
 scikit-learn
+PySide6
