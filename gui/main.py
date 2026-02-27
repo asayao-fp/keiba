@@ -8,6 +8,7 @@ JV-Link 更新 & 複勝買い目提案 GUI (PySide6)
   python gui/main.py
 """
 
+import csv
 import json
 import os
 import sqlite3
@@ -16,8 +17,8 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QDate, QProcess, Qt
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import QDate, QProcess, Qt, QUrl
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHeaderView,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
@@ -54,6 +56,11 @@ CONFIG_PATH = REPO_ROOT / ".keiba_gui_config.json"
 
 # レース選択テーブルの列ヘッダー
 _RACE_TABLE_COLS = ["✓", "レース名", "競馬場", "R", "距離", "馬場", "グレード", "race_key"]
+
+# 予想結果テーブルの列ヘッダー
+_SUMMARY_TABLE_COLS = ["レース名", "競馬場", "R", "S", "買い目数", "賭金計", "期待値計", "avg p", "F/B", "race_key"]
+_BETS_TABLE_COLS = ["馬番", "賭金", "p_place", "オッズ使用", "期待値(円)", "EV/1unit"]
+_PRED_TABLE_COLS = ["馬番", "馬ID", "p_place"]
 
 
 def _script(name: str) -> str:
@@ -147,7 +154,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Keiba Pipeline GUI")
-        self.resize(740, 860)
+        self.resize(740, 1000)
 
         # 実行中プロセス管理
         self._processes: list[QProcess] = []
@@ -197,11 +204,11 @@ class MainWindow(QMainWindow):
 
         root_layout.addWidget(form_group)
 
-        # ── レース選択 (重賞) ──────────────────────────
-        races_group = QGroupBox("レース選択 (重賞)")
+        # ── レース選択 ──────────────────────────────────
+        races_group = QGroupBox("レース選択")
         races_layout = QVBoxLayout(races_group)
 
-        # コントロール行: place_odds チェックボックス + 読み込みボタン
+        # 1行目: place_odds チェックボックス + 重賞読み込みボタン
         races_ctrl = QHBoxLayout()
         self.place_odds_chk = QCheckBox("place_odds のみ")
         self.place_odds_chk.setChecked(True)
@@ -211,6 +218,20 @@ class MainWindow(QMainWindow):
         self.load_races_btn.clicked.connect(self._on_load_graded_races)
         races_ctrl.addWidget(self.load_races_btn)
         races_layout.addLayout(races_ctrl)
+
+        # 2行目: キーワード検索 + 週末メインレース + 検索ボタン
+        search_ctrl = QHBoxLayout()
+        search_ctrl.addWidget(QLabel("キーワード:"))
+        self.keyword_edit = QLineEdit()
+        self.keyword_edit.setPlaceholderText("レース名で検索 (部分一致)")
+        self.keyword_edit.returnPressed.connect(self._on_search_races)
+        search_ctrl.addWidget(self.keyword_edit)
+        self.weekend_chk = QCheckBox("週末メイン (R≥10)")
+        search_ctrl.addWidget(self.weekend_chk)
+        self.search_races_btn = QPushButton("検索")
+        self.search_races_btn.clicked.connect(self._on_search_races)
+        search_ctrl.addWidget(self.search_races_btn)
+        races_layout.addLayout(search_ctrl)
 
         # レーステーブル
         self.races_table = QTableWidget(0, len(_RACE_TABLE_COLS))
@@ -271,6 +292,56 @@ class MainWindow(QMainWindow):
 
         root_layout.addWidget(log_group)
 
+        # ── 予想結果 ──────────────────────────────────
+        results_group = QGroupBox("予想結果")
+        results_layout = QVBoxLayout(results_group)
+
+        # コントロール行
+        results_ctrl = QHBoxLayout()
+        self.refresh_results_btn = QPushButton("結果を更新")
+        self.refresh_results_btn.clicked.connect(self._on_refresh_results)
+        results_ctrl.addWidget(self.refresh_results_btn)
+        open_folder_btn = QPushButton("出力フォルダを開く")
+        open_folder_btn.clicked.connect(self._on_open_outdir)
+        results_ctrl.addWidget(open_folder_btn)
+        results_ctrl.addStretch()
+        results_layout.addLayout(results_ctrl)
+
+        # サマリーテーブル
+        results_layout.addWidget(QLabel("サマリー (行をクリックすると買い目・予測を表示):"))
+        self.summary_table = QTableWidget(0, len(_SUMMARY_TABLE_COLS))
+        self.summary_table.setHorizontalHeaderLabels(_SUMMARY_TABLE_COLS)
+        self.summary_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self.summary_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.summary_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.summary_table.verticalHeader().setVisible(False)
+        self.summary_table.setMinimumHeight(80)
+        self.summary_table.itemSelectionChanged.connect(self._on_summary_row_selected)
+        results_layout.addWidget(self.summary_table)
+
+        # 買い目テーブル
+        results_layout.addWidget(QLabel("買い目:"))
+        self.bets_table = QTableWidget(0, len(_BETS_TABLE_COLS))
+        self.bets_table.setHorizontalHeaderLabels(_BETS_TABLE_COLS)
+        self.bets_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.bets_table.verticalHeader().setVisible(False)
+        self.bets_table.setMinimumHeight(60)
+        results_layout.addWidget(self.bets_table)
+
+        # 予測テーブル
+        results_layout.addWidget(QLabel("予測:"))
+        self.pred_table = QTableWidget(0, len(_PRED_TABLE_COLS))
+        self.pred_table.setHorizontalHeaderLabels(_PRED_TABLE_COLS)
+        self.pred_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.pred_table.verticalHeader().setVisible(False)
+        self.pred_table.setMinimumHeight(80)
+        results_layout.addWidget(self.pred_table)
+
+        root_layout.addWidget(results_group)
+
         # ── 設定の読込・デフォルト検出 ────────────────
         self._load_settings()
 
@@ -320,6 +391,10 @@ class MainWindow(QMainWindow):
         # レースキー
         self.racekeys_edit.setText(cfg.get("race_keys", ""))
 
+        # 検索キーワード・週末フィルタ
+        self.keyword_edit.setText(cfg.get("search_keyword", ""))
+        self.weekend_chk.setChecked(cfg.get("weekend_filter", False))
+
         # ウィンドウサイズ
         geom = cfg.get("window_geometry")
         if geom:
@@ -340,6 +415,8 @@ class MainWindow(QMainWindow):
             "python32_cmd": py32_to_display(py32_cmd),
             "last_from_date": self.date_edit.date().toString("yyyyMMdd"),
             "race_keys": self.racekeys_edit.text().strip(),
+            "search_keyword": self.keyword_edit.text().strip(),
+            "weekend_filter": self.weekend_chk.isChecked(),
             "window_geometry": {
                 "x": geom.x(),
                 "y": geom.y(),
@@ -400,7 +477,52 @@ class MainWindow(QMainWindow):
             conn.close()
 
         rows.sort(key=lambda r: (r.get("course_code", ""), int(r.get("race_no") or 0) if str(r.get("race_no") or "").isdigit() else 0))
+        self._populate_races_table(rows)
+        self._log(f"[重賞読み込み] {len(rows)} 件取得 ({date_str}, place_odds={require_place_odds})")
+        if not rows:
+            self._log("[重賞読み込み] 該当レースなし。日付・DB・place_odds フィルタを確認してください。")
 
+    def _on_search_races(self) -> None:
+        """キーワード/週末メインフィルタでレースを検索してテーブルに表示する。"""
+        db = self.db_edit.text().strip()
+        if not self._require(db, "DB パス"):
+            return
+        date_str = self.date_edit.date().toString("yyyyMMdd")
+        require_place_odds = self.place_odds_chk.isChecked()
+        keyword = self.keyword_edit.text().strip() or None
+        min_race_no = 10 if self.weekend_chk.isChecked() else None
+
+        try:
+            conn = sqlite3.connect(db)
+        except sqlite3.Error as e:
+            self._log(f"[検索] DB接続失敗: {e}")
+            return
+
+        try:
+            rows = fetch_races(
+                conn,
+                from_date=date_str,
+                to_date=date_str,
+                grade_codes=None,
+                name_contains=keyword,
+                course_codes=None,
+                require_place_odds=require_place_odds,
+                min_race_no=min_race_no,
+            )
+        except sqlite3.OperationalError as e:
+            self._log(f"[検索] クエリ失敗: {e}")
+            return
+        finally:
+            conn.close()
+
+        rows.sort(key=lambda r: (r.get("course_code", ""), int(r.get("race_no") or 0) if str(r.get("race_no") or "").isdigit() else 0))
+        self._populate_races_table(rows)
+        self._log(f"[検索] {len(rows)} 件取得 (date={date_str}, keyword={keyword!r}, weekend={self.weekend_chk.isChecked()}, place_odds={require_place_odds})")
+        if not rows:
+            self._log("[検索] 該当レースなし。日付・キーワード・フィルタを確認してください。")
+
+    def _populate_races_table(self, rows: list[dict]) -> None:
+        """rows をレーステーブルに表示する (既存データをクリアする)。"""
         self.races_table.setRowCount(0)
 
         def _ro_item(val: object) -> QTableWidgetItem:
@@ -425,10 +547,6 @@ class MainWindow(QMainWindow):
             self.races_table.setItem(row_idx, 6, _ro_item(row_data.get("grade_code", "")))
             self.races_table.setItem(row_idx, 7, _ro_item(row_data.get("race_key", "")))
 
-        self._log(f"[重賞読み込み] {len(rows)} 件取得 ({date_str}, place_odds={require_place_odds})")
-        if not rows:
-            self._log("[重賞読み込み] 該当レースなし。日付・DB・place_odds フィルタを確認してください。")
-
     def _get_selected_race_keys(self) -> list[str]:
         """テーブルでチェックされた行の race_key を返す。"""
         keys = []
@@ -448,6 +566,145 @@ class MainWindow(QMainWindow):
             self._log(f"[レース選択] {len(keys)} 件をレースキーに設定: {' '.join(keys)}")
         else:
             QMessageBox.information(self, "レース選択", "テーブルでレースにチェックを入れてください。")
+
+    # ── 予想結果 ──────────────────────────────────────
+
+    def _on_open_outdir(self) -> None:
+        """出力フォルダをファイルマネージャーで開く。"""
+        out_dir = self.outdir_edit.text().strip()
+        if not out_dir:
+            QMessageBox.warning(self, "エラー", "出力ディレクトリが未設定です。")
+            return
+        p = Path(out_dir)
+        if not p.exists():
+            QMessageBox.warning(self, "エラー", f"出力ディレクトリが見つかりません:\n{out_dir}")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
+
+    def _on_refresh_results(self) -> None:
+        """summary.csv を読み込んでサマリーテーブルを更新する。"""
+        out_dir = self.outdir_edit.text().strip()
+        if not out_dir:
+            self._log("[結果更新] 出力ディレクトリが未設定です")
+            return
+
+        summary_path = Path(out_dir) / "summary.csv"
+        if not summary_path.exists():
+            self._log(f"[結果更新] summary.csv が見つかりません: {summary_path}")
+            self.summary_table.setRowCount(0)
+            return
+
+        try:
+            with open(summary_path, encoding="utf-8", newline="") as fh:
+                summary_rows = list(csv.DictReader(fh))
+        except Exception as e:
+            self._log(f"[結果更新] summary.csv 読み込み失敗: {e}")
+            return
+
+        # DB からレース情報を取得して表示名を補完する
+        race_info: dict[str, dict] = {}
+        db = self.db_edit.text().strip()
+        if db and Path(db).exists():
+            try:
+                conn = sqlite3.connect(db)
+                try:
+                    for row in summary_rows:
+                        rk = row.get("race_key", "")
+                        if rk:
+                            cur = conn.execute(
+                                "SELECT race_name_short, course_code, race_no"
+                                " FROM races WHERE race_key = ?",
+                                (rk,),
+                            )
+                            r = cur.fetchone()
+                            if r:
+                                race_info[rk] = {
+                                    "race_name_short": r[0],
+                                    "course_code": r[1],
+                                    "race_no": r[2],
+                                }
+                finally:
+                    conn.close()
+            except Exception as e:
+                self._log(f"[結果更新] DB からレース情報取得失敗: {e}")
+
+        def _ro(val: object) -> QTableWidgetItem:
+            it = QTableWidgetItem(str(val) if val is not None else "")
+            it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            return it
+
+        self.summary_table.setRowCount(0)
+        for row_data in summary_rows:
+            rk = row_data.get("race_key", "")
+            info = race_info.get(rk, {})
+            row_idx = self.summary_table.rowCount()
+            self.summary_table.insertRow(row_idx)
+            self.summary_table.setItem(row_idx, 0, _ro(info.get("race_name_short", rk)))
+            self.summary_table.setItem(row_idx, 1, _ro(info.get("course_code", "")))
+            self.summary_table.setItem(row_idx, 2, _ro(info.get("race_no", "")))
+            self.summary_table.setItem(row_idx, 3, _ro(row_data.get("status", "")))
+            self.summary_table.setItem(row_idx, 4, _ro(row_data.get("n_bets", "")))
+            self.summary_table.setItem(row_idx, 5, _ro(row_data.get("total_stake", "")))
+            self.summary_table.setItem(row_idx, 6, _ro(row_data.get("sum_expected_value_yen", "")))
+            self.summary_table.setItem(row_idx, 7, _ro(row_data.get("avg_p_place", "")))
+            self.summary_table.setItem(row_idx, 8, _ro(row_data.get("fallback_used", "")))
+            self.summary_table.setItem(row_idx, 9, _ro(rk))
+
+        self.bets_table.setRowCount(0)
+        self.pred_table.setRowCount(0)
+        self._log(f"[結果更新] {len(summary_rows)} 件読み込みました: {summary_path}")
+
+    def _on_summary_row_selected(self) -> None:
+        """サマリーテーブルの選択行の買い目・予測を詳細テーブルに表示する。"""
+        selected = self.summary_table.selectedItems()
+        if not selected:
+            return
+
+        row = selected[0].row()
+        race_key_item = self.summary_table.item(row, 9)
+        if not race_key_item:
+            return
+        race_key = race_key_item.text()
+        out_dir = self.outdir_edit.text().strip()
+        if not out_dir:
+            return
+
+        # 買い目テーブルを更新
+        self.bets_table.setRowCount(0)
+        bets_path = Path(out_dir) / f"bets_{race_key}.json"
+        if bets_path.exists():
+            try:
+                bets: list[dict] = json.loads(bets_path.read_text(encoding="utf-8"))
+                for bet in bets:
+                    r = self.bets_table.rowCount()
+                    self.bets_table.insertRow(r)
+                    self.bets_table.setItem(r, 0, QTableWidgetItem(str(bet.get("horse_no", ""))))
+                    self.bets_table.setItem(r, 1, QTableWidgetItem(str(bet.get("stake", ""))))
+                    self.bets_table.setItem(r, 2, QTableWidgetItem(str(bet.get("p_place", ""))))
+                    self.bets_table.setItem(r, 3, QTableWidgetItem(str(bet.get("place_odds_used", ""))))
+                    self.bets_table.setItem(r, 4, QTableWidgetItem(str(bet.get("expected_value_yen", ""))))
+                    self.bets_table.setItem(r, 5, QTableWidgetItem(str(bet.get("ev_per_1unit", ""))))
+            except Exception as e:
+                self._log(f"[結果] 買い目ファイル読み込み失敗: {e}")
+        else:
+            self._log(f"[結果] 買い目ファイルが見つかりません: {bets_path}")
+
+        # 予測テーブルを更新
+        self.pred_table.setRowCount(0)
+        pred_path = Path(out_dir) / f"pred_{race_key}.json"
+        if pred_path.exists():
+            try:
+                preds: list[dict] = json.loads(pred_path.read_text(encoding="utf-8"))
+                for pred in preds:
+                    r = self.pred_table.rowCount()
+                    self.pred_table.insertRow(r)
+                    self.pred_table.setItem(r, 0, QTableWidgetItem(str(pred.get("horse_no", ""))))
+                    self.pred_table.setItem(r, 1, QTableWidgetItem(str(pred.get("horse_id", ""))))
+                    self.pred_table.setItem(r, 2, QTableWidgetItem(str(pred.get("p_place", ""))))
+            except Exception as e:
+                self._log(f"[結果] 予測ファイル読み込み失敗: {e}")
+        else:
+            self._log(f"[結果] 予測ファイルが見つかりません: {pred_path}")
 
     # ── ウィジェットヘルパー ──────────────────────────
 
@@ -504,6 +761,8 @@ class MainWindow(QMainWindow):
         self.suggest_btn.setEnabled(not running)
         self.update_suggest_btn.setEnabled(not running)
         self.load_races_btn.setEnabled(not running)
+        self.search_races_btn.setEnabled(not running)
+        self.refresh_results_btn.setEnabled(not running)
         self.cancel_btn.setEnabled(running)
 
     # ── Update (RACE) ─────────────────────────────────
@@ -606,6 +865,7 @@ class MainWindow(QMainWindow):
         self._set_running(False)
         if success:
             self._log("[Suggest] 完了")
+            self._on_refresh_results()
         else:
             self._log("[Suggest] キャンセルされました" if self._cancelled else "[Suggest] エラーで終了しました")
 
@@ -629,6 +889,7 @@ class MainWindow(QMainWindow):
         self._set_running(False)
         if success:
             self._log("[Update+Suggest] 完了")
+            self._on_refresh_results()
         else:
             self._log("[Update+Suggest] キャンセルされました" if self._cancelled else "[Update+Suggest] エラーで終了しました")
 
