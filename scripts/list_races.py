@@ -44,6 +44,7 @@ def fetch_races(
     name_contains: str | None,
     course_codes: list[str] | None,
     require_place_odds: bool = False,
+    min_race_no: int | None = None,
 ) -> list[dict]:
     query = """
         SELECT
@@ -89,6 +90,10 @@ def fetch_races(
             " AND place_odds.place_odds_max IS NOT NULL"
             ")\n"
         )
+
+    if min_race_no is not None:
+        query += "  AND CAST(race_no AS INTEGER) >= ?\n"
+        params.append(min_race_no)
 
     query += (
         "ORDER BY yyyymmdd DESC, course_code ASC, kai ASC, day ASC, race_no ASC"
