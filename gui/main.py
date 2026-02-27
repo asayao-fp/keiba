@@ -558,10 +558,14 @@ class MainWindow(QMainWindow):
 
     def _on_stdout(self, proc: QProcess) -> None:
         data = proc.readAllStandardOutput().data()
+
+        # Windowsの多くのCLI出力はcp932(=Shift-JIS拡張)なのでまずcp932で試す
         try:
-            text = data.decode("utf-8", errors="replace")
+            text = data.decode("cp932")
         except Exception:
-            text = str(data)
+            # フォールバック
+            text = data.decode("utf-8", errors="replace")
+
         for line in text.splitlines():
             self._log(line)
 
