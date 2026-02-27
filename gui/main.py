@@ -10,6 +10,7 @@ JV-Link 更新 & 複勝買い目提案 GUI (PySide6)
 
 import csv
 import json
+import logging
 import os
 import sqlite3
 import subprocess
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QDate, QProcess, Qt, QUrl
-from PySide6.QtGui import QCloseEvent, QDesktopServices
+from PySide6.QtGui import QBrush, QCloseEvent, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -35,11 +36,14 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
+
+logger = logging.getLogger(__name__)
 
 # リポジトリルート (gui/ の親ディレクトリ)
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -60,7 +64,12 @@ _RACE_TABLE_COLS = ["✓", "レース名", "競馬場", "R", "距離", "馬場",
 # 予想結果テーブルの列ヘッダー
 _SUMMARY_TABLE_COLS = ["レース名", "競馬場", "R", "S", "買い目数", "賭金計", "期待値計", "avg p", "F/B", "race_key"]
 _BETS_TABLE_COLS = ["馬番", "賭金", "p_place", "オッズ使用", "期待値(円)", "EV/1unit"]
-_PRED_TABLE_COLS = ["馬番", "馬ID", "p_place"]
+_PRED_TABLE_COLS = ["順位", "馬番", "馬ID", "騎手名", "調教師名", "p_place", "着順", "複勝圏", "TP"]
+
+# 真陽性ハイライト色 (予測上位かつ複勝圏的中)
+_TP_HIGHLIGHT_COLOR = QColor("#c8f5c8")
+# フォールバック順位値 (rank が未設定の場合に使用)
+_RANK_FALLBACK = 9999
 
 
 def _script(name: str) -> str:
@@ -376,8 +385,28 @@ class MainWindow(QMainWindow):
         self.summary_table.itemSelectionChanged.connect(self._on_summary_row_selected)
         results_layout.addWidget(self.summary_table)
 
+        # レースヘッダーラベル
+        self.race_header_label = QLabel("")
+        self.race_header_label.setStyleSheet(
+            "QLabel { font-weight: bold; padding: 4px 6px;"
+            " background: palette(midlight); border-radius: 3px; }"
+        )
+        self.race_header_label.setVisible(False)
+        results_layout.addWidget(self.race_header_label)
+
+        # 買い目コントロール行
+        bets_header_row = QHBoxLayout()
+        self._bets_label = QLabel("買い目:")
+        bets_header_row.addWidget(self._bets_label)
+        bets_header_row.addStretch()
+        self.toggle_bets_btn = QPushButton("買い目を隠す")
+        self.toggle_bets_btn.setCheckable(True)
+        self.toggle_bets_btn.setChecked(False)
+        self.toggle_bets_btn.clicked.connect(self._on_toggle_bets)
+        bets_header_row.addWidget(self.toggle_bets_btn)
+        results_layout.addLayout(bets_header_row)
+
         # 買い目テーブル
-        results_layout.addWidget(QLabel("買い目:"))
         self.bets_table = QTableWidget(0, len(_BETS_TABLE_COLS))
         self.bets_table.setHorizontalHeaderLabels(_BETS_TABLE_COLS)
         self.bets_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -385,14 +414,45 @@ class MainWindow(QMainWindow):
         self.bets_table.setMinimumHeight(60)
         results_layout.addWidget(self.bets_table)
 
+        # 予測フィルタ行
+        pred_filter_row = QHBoxLayout()
+        pred_filter_row.addWidget(QLabel("予測:"))
+        pred_filter_row.addStretch()
+        pred_filter_row.addWidget(QLabel("上位表示:"))
+        self.topn_spin = QSpinBox()
+        self.topn_spin.setMinimum(0)
+        self.topn_spin.setMaximum(99)
+        self.topn_spin.setValue(8)
+        self.topn_spin.setSpecialValueText("全て")
+        self.topn_spin.setToolTip("0 = 全て表示 / N = 上位N頭のみ表示")
+        self.topn_spin.valueChanged.connect(self._on_pred_filter_changed)
+        pred_filter_row.addWidget(self.topn_spin)
+        self.placed_only_chk = QCheckBox("複勝圏のみ")
+        self.placed_only_chk.setToolTip("実際に複勝圏に入った馬のみ表示")
+        self.placed_only_chk.stateChanged.connect(self._on_pred_filter_changed)
+        pred_filter_row.addWidget(self.placed_only_chk)
+        self.has_odds_chk = QCheckBox("オッズあり馬のみ")
+        self.has_odds_chk.setToolTip("place_odds テーブルにオッズが存在する馬のみ表示")
+        self.has_odds_chk.stateChanged.connect(self._on_pred_filter_changed)
+        pred_filter_row.addWidget(self.has_odds_chk)
+        results_layout.addLayout(pred_filter_row)
+
         # 予測テーブル
-        results_layout.addWidget(QLabel("予測:"))
         self.pred_table = QTableWidget(0, len(_PRED_TABLE_COLS))
         self.pred_table.setHorizontalHeaderLabels(_PRED_TABLE_COLS)
         self.pred_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.pred_table.verticalHeader().setVisible(False)
+        self.pred_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.Stretch
+        )
+        self.pred_table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.ResizeMode.Stretch
+        )
         self.pred_table.setMinimumHeight(80)
         results_layout.addWidget(self.pred_table)
+
+        # 内部キャッシュ: フィルタ再適用用
+        self._pred_rows_cache: list[dict] = []
 
         self._results_box.setContentLayout(results_layout)
         root_layout.addWidget(self._results_box)
@@ -720,6 +780,8 @@ class MainWindow(QMainWindow):
 
         self.bets_table.setRowCount(0)
         self.pred_table.setRowCount(0)
+        self._pred_rows_cache = []
+        self.race_header_label.setVisible(False)
         self._log(f"[結果更新] {len(summary_rows)} 件読み込みました: {summary_path}")
 
     def _on_summary_row_selected(self) -> None:
@@ -736,6 +798,11 @@ class MainWindow(QMainWindow):
         out_dir = self.outdir_edit.text().strip()
         if not out_dir:
             return
+
+        db = self.db_edit.text().strip()
+
+        # レースヘッダーラベルを更新
+        self._update_race_header(race_key, db)
 
         # 買い目テーブルを更新
         self.bets_table.setRowCount(0)
@@ -757,22 +824,211 @@ class MainWindow(QMainWindow):
         else:
             self._log(f"[結果] 買い目ファイルが見つかりません: {bets_path}")
 
-        # 予測テーブルを更新
-        self.pred_table.setRowCount(0)
+        # 予測データをロードしてDBで拡充しキャッシュ
+        self._pred_rows_cache = []
         pred_path = Path(out_dir) / f"pred_{race_key}.json"
         if pred_path.exists():
             try:
                 preds: list[dict] = json.loads(pred_path.read_text(encoding="utf-8"))
-                for pred in preds:
-                    r = self.pred_table.rowCount()
-                    self.pred_table.insertRow(r)
-                    self.pred_table.setItem(r, 0, QTableWidgetItem(str(pred.get("horse_no", ""))))
-                    self.pred_table.setItem(r, 1, QTableWidgetItem(str(pred.get("horse_id", ""))))
-                    self.pred_table.setItem(r, 2, QTableWidgetItem(str(pred.get("p_place", ""))))
             except Exception as e:
                 self._log(f"[結果] 予測ファイル読み込み失敗: {e}")
+                preds = []
         else:
             self._log(f"[結果] 予測ファイルが見つかりません: {pred_path}")
+            preds = []
+
+        if preds:
+            self._pred_rows_cache = self._enrich_preds(preds, race_key, db)
+
+        self._apply_pred_filters()
+
+    def _update_race_header(self, race_key: str, db: str) -> None:
+        """race_key に対応するレースヘッダーラベルを更新する。"""
+        if not db or not Path(db).exists():
+            self.race_header_label.setText(race_key)
+            self.race_header_label.setVisible(True)
+            return
+        try:
+            conn = sqlite3.connect(db)
+            try:
+                cur = conn.execute(
+                    "SELECT yyyymmdd, course_code, race_no, race_name_short,"
+                    " grade_code, distance_m, track_code"
+                    " FROM races WHERE race_key = ?",
+                    (race_key,),
+                )
+                r = cur.fetchone()
+                if r:
+                    yyyymmdd, course_code, race_no, race_name_short, grade_code, distance_m, track_code = r
+                    # 出走頭数を取得
+                    cnt_cur = conn.execute(
+                        "SELECT COUNT(*) FROM entries WHERE race_key = ?", (race_key,)
+                    )
+                    n_entries = cnt_cur.fetchone()[0]
+                    parts = [
+                        str(yyyymmdd or ""),
+                        str(course_code or ""),
+                        f"R{race_no}" if race_no else "",
+                        str(race_name_short or ""),
+                        str(grade_code or ""),
+                        f"{distance_m}m" if distance_m else "",
+                        str(track_code or ""),
+                        f"出走{n_entries}頭",
+                    ]
+                    label = "  |  ".join(p for p in parts if p)
+                    self.race_header_label.setText(label)
+                else:
+                    self.race_header_label.setText(race_key)
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning("[レースヘッダー] DB取得失敗: %s", e)
+            self.race_header_label.setText(race_key)
+        self.race_header_label.setVisible(True)
+
+    def _enrich_preds(self, preds: list[dict], race_key: str, db: str) -> list[dict]:
+        """予測リストを DB の entries/jockeys/trainers/place_odds で拡充して返す。"""
+        # p_place 降順でソート → rank 付け
+        sorted_preds = sorted(preds, key=lambda x: float(x.get("p_place", 0) or 0), reverse=True)
+        for i, pred in enumerate(sorted_preds, start=1):
+            pred["rank"] = i
+
+        if not db or not Path(db).exists():
+            return sorted_preds
+
+        try:
+            conn = sqlite3.connect(db)
+        except Exception as e:
+            logger.warning("[予測拡充] DB接続失敗: %s", e)
+            return sorted_preds
+
+        try:
+            # entries テーブルが存在するか確認
+            tbl_check = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='entries'"
+            ).fetchone()
+            if not tbl_check:
+                logger.warning("[予測拡充] entries テーブルが存在しません")
+                return sorted_preds
+
+            # entries を horse_no キーでフェッチ
+            entry_rows = conn.execute(
+                "SELECT horse_no, finish_pos, is_place, jockey_code, trainer_code"
+                " FROM entries WHERE race_key = ?",
+                (race_key,),
+            ).fetchall()
+            entry_map: dict[str, dict] = {
+                r[0]: {
+                    "finish_pos": r[1], "is_place": r[2],
+                    "jockey_code": r[3], "trainer_code": r[4],
+                }
+                for r in entry_rows
+            }
+
+            # jockeys テーブルが存在すれば騎手名を取得
+            jockey_map: dict[str, str] = {}
+            try:
+                jk_rows = conn.execute(
+                    "SELECT jockey_code, jockey_name FROM jockeys"
+                ).fetchall()
+                jockey_map = {r[0]: r[1] for r in jk_rows if r[0]}
+            except Exception:
+                logger.warning("[予測拡充] jockeys テーブルが利用できません")
+
+            # trainers テーブルが存在すれば調教師名を取得
+            trainer_map: dict[str, str] = {}
+            try:
+                tr_rows = conn.execute(
+                    "SELECT trainer_code, trainer_name FROM trainers"
+                ).fetchall()
+                trainer_map = {r[0]: r[1] for r in tr_rows if r[0]}
+            except Exception:
+                logger.warning("[予測拡充] trainers テーブルが利用できません")
+
+            # place_odds テーブルが存在すれば has_odds セットを取得
+            has_odds_set: set[str] = set()
+            try:
+                od_rows = conn.execute(
+                    "SELECT horse_no FROM place_odds WHERE race_key = ?",
+                    (race_key,),
+                ).fetchall()
+                has_odds_set = {r[0] for r in od_rows}
+            except Exception:
+                logger.warning("[予測拡充] place_odds テーブルが利用できません")
+
+            # 拡充
+            for pred in sorted_preds:
+                hno = str(pred.get("horse_no", ""))
+                entry = entry_map.get(hno, {})
+                jockey_code = entry.get("jockey_code") or ""
+                trainer_code = entry.get("trainer_code") or ""
+                pred["jockey_name"] = jockey_map.get(jockey_code, jockey_code)
+                pred["trainer_name"] = trainer_map.get(trainer_code, trainer_code)
+                pred["finish_pos"] = entry.get("finish_pos")
+                pred["is_place"] = entry.get("is_place")
+                pred["has_odds"] = hno in has_odds_set
+
+        except Exception as e:
+            logger.warning("[予測拡充] 拡充処理失敗: %s", e)
+        finally:
+            conn.close()
+
+        return sorted_preds
+
+    def _apply_pred_filters(self) -> None:
+        """キャッシュされた予測行にフィルタを適用して pred_table を再描画する。"""
+        rows = self._pred_rows_cache
+        topn = self.topn_spin.value()
+        placed_only = self.placed_only_chk.isChecked()
+        has_odds_only = self.has_odds_chk.isChecked()
+
+        # "Show top N" フィルタ (rank 順 = p_place 降順ですでにソート済み)
+        if topn > 0:
+            rows = [r for r in rows if r.get("rank", _RANK_FALLBACK) <= topn]
+
+        if placed_only:
+            rows = [r for r in rows if r.get("is_place")]
+
+        if has_odds_only:
+            rows = [r for r in rows if r.get("has_odds")]
+
+        self.pred_table.setRowCount(0)
+        highlight = QBrush(_TP_HIGHLIGHT_COLOR)
+
+        for pred in rows:
+            r = self.pred_table.rowCount()
+            self.pred_table.insertRow(r)
+
+            is_tp = bool(pred.get("is_place")) and pred.get("rank", _RANK_FALLBACK) <= (topn if topn > 0 else _RANK_FALLBACK)
+
+            def _item(val: object) -> QTableWidgetItem:
+                it = QTableWidgetItem(str(val) if val is not None else "")
+                if is_tp:
+                    it.setBackground(highlight)
+                return it
+
+            finish_pos = pred.get("finish_pos")
+            is_place = pred.get("is_place")
+
+            self.pred_table.setItem(r, 0, _item(pred.get("rank", "")))
+            self.pred_table.setItem(r, 1, _item(pred.get("horse_no", "")))
+            self.pred_table.setItem(r, 2, _item(pred.get("horse_id", "")))
+            self.pred_table.setItem(r, 3, _item(pred.get("jockey_name", "")))
+            self.pred_table.setItem(r, 4, _item(pred.get("trainer_name", "")))
+            self.pred_table.setItem(r, 5, _item(f"{float(pred.get('p_place', 0)):.4f}" if pred.get("p_place") is not None else ""))
+            self.pred_table.setItem(r, 6, _item(finish_pos if finish_pos is not None else ""))
+            self.pred_table.setItem(r, 7, _item("✓" if is_place else ("" if is_place is None else "✗")))
+            self.pred_table.setItem(r, 8, _item("✓" if is_tp else ""))
+
+    def _on_pred_filter_changed(self) -> None:
+        """フィルタ変更時に予測テーブルを再描画する。"""
+        self._apply_pred_filters()
+
+    def _on_toggle_bets(self) -> None:
+        """買い目テーブルの表示/非表示を切り替える。"""
+        hidden = self.toggle_bets_btn.isChecked()
+        self.bets_table.setVisible(not hidden)
+        self.toggle_bets_btn.setText("買い目を表示" if hidden else "買い目を隠す")
 
     # ── ウィジェットヘルパー ──────────────────────────
 
