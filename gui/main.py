@@ -10,6 +10,7 @@ JV-Link 更新 & 複勝買い目提案 GUI (PySide6)
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -18,17 +19,22 @@ from typing import Callable
 from PySide6.QtCore import QDate, QProcess, Qt
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
+    QCheckBox,
     QDateEdit,
     QFileDialog,
     QFormLayout,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -39,8 +45,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # scripts/ ディレクトリの絶対パス
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
+# scripts/ を sys.path に追加して fetch_races をインポート
+sys.path.insert(0, str(SCRIPTS_DIR))
+from list_races import fetch_races  # noqa: E402
+
 # 設定ファイルのパス
 CONFIG_PATH = REPO_ROOT / ".keiba_gui_config.json"
+
+# レース選択テーブルの列ヘッダー
+_RACE_TABLE_COLS = ["✓", "レース名", "競馬場", "R", "距離", "馬場", "グレード", "race_key"]
 
 
 def _script(name: str) -> str:
@@ -134,7 +147,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Keiba Pipeline GUI")
-        self.resize(740, 680)
+        self.resize(740, 860)
 
         # 実行中プロセス管理
         self._processes: list[QProcess] = []
@@ -178,11 +191,45 @@ class MainWindow(QMainWindow):
 
         self.racekeys_edit = QLineEdit()
         self.racekeys_edit.setPlaceholderText(
-            "レースキー (スペース区切り) — Suggest ボタン用"
+            "レースキー (スペース区切り) — テーブル未選択時の手動入力"
         )
-        form.addRow("レースキー:", self.racekeys_edit)
+        form.addRow("レースキー (手動):", self.racekeys_edit)
 
         root_layout.addWidget(form_group)
+
+        # ── レース選択 (重賞) ──────────────────────────
+        races_group = QGroupBox("レース選択 (重賞)")
+        races_layout = QVBoxLayout(races_group)
+
+        # コントロール行: place_odds チェックボックス + 読み込みボタン
+        races_ctrl = QHBoxLayout()
+        self.place_odds_chk = QCheckBox("place_odds のみ")
+        self.place_odds_chk.setChecked(True)
+        races_ctrl.addWidget(self.place_odds_chk)
+        races_ctrl.addStretch()
+        self.load_races_btn = QPushButton("重賞レースを読み込む")
+        self.load_races_btn.clicked.connect(self._on_load_graded_races)
+        races_ctrl.addWidget(self.load_races_btn)
+        races_layout.addLayout(races_ctrl)
+
+        # レーステーブル
+        self.races_table = QTableWidget(0, len(_RACE_TABLE_COLS))
+        self.races_table.setHorizontalHeaderLabels(_RACE_TABLE_COLS)
+        self.races_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.races_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.races_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.races_table.verticalHeader().setVisible(False)
+        self.races_table.setMinimumHeight(120)
+        races_layout.addWidget(self.races_table)
+
+        # 下部: 選択したレースをキーに設定するボタン
+        use_sel_btn = QPushButton("選択したレースをキーに設定")
+        use_sel_btn.clicked.connect(self._on_use_selected_races)
+        races_layout.addWidget(use_sel_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+        root_layout.addWidget(races_group)
 
         # ── ボタン ────────────────────────────────────
         btn_layout = QHBoxLayout()
@@ -320,6 +367,88 @@ class MainWindow(QMainWindow):
                 "32-bit Python が自動検出できませんでした。\n手動でパスを入力または選択してください。",
             )
 
+    # ── レース選択 (重賞) ──────────────────────────────
+
+    def _on_load_graded_races(self) -> None:
+        """選択日の重賞レース (grade_code A/B/C) をDBから読み込んでテーブルに表示する。"""
+        db = self.db_edit.text().strip()
+        if not self._require(db, "DB パス"):
+            return
+        date_str = self.date_edit.date().toString("yyyyMMdd")
+        require_place_odds = self.place_odds_chk.isChecked()
+
+        try:
+            conn = sqlite3.connect(db)
+        except sqlite3.Error as e:
+            self._log(f"[重賞読み込み] DB接続失敗: {e}")
+            return
+
+        try:
+            rows = fetch_races(
+                conn,
+                from_date=date_str,
+                to_date=date_str,
+                grade_codes=["A", "B", "C"],
+                name_contains=None,
+                course_codes=None,
+                require_place_odds=require_place_odds,
+            )
+        except sqlite3.OperationalError as e:
+            self._log(f"[重賞読み込み] クエリ失敗: {e}")
+            return
+        finally:
+            conn.close()
+
+        rows.sort(key=lambda r: (r.get("course_code", ""), int(r.get("race_no") or 0) if str(r.get("race_no") or "").isdigit() else 0))
+
+        self.races_table.setRowCount(0)
+
+        def _ro_item(val: object) -> QTableWidgetItem:
+            it = QTableWidgetItem(str(val) if val is not None else "")
+            it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            return it
+
+        for row_data in rows:
+            row_idx = self.races_table.rowCount()
+            self.races_table.insertRow(row_idx)
+
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            chk.setCheckState(Qt.CheckState.Unchecked)
+            self.races_table.setItem(row_idx, 0, chk)
+
+            self.races_table.setItem(row_idx, 1, _ro_item(row_data.get("race_name_short", "")))
+            self.races_table.setItem(row_idx, 2, _ro_item(row_data.get("course_code", "")))
+            self.races_table.setItem(row_idx, 3, _ro_item(row_data.get("race_no", "")))
+            self.races_table.setItem(row_idx, 4, _ro_item(row_data.get("distance_m", "")))
+            self.races_table.setItem(row_idx, 5, _ro_item(row_data.get("track_code", "")))
+            self.races_table.setItem(row_idx, 6, _ro_item(row_data.get("grade_code", "")))
+            self.races_table.setItem(row_idx, 7, _ro_item(row_data.get("race_key", "")))
+
+        self._log(f"[重賞読み込み] {len(rows)} 件取得 ({date_str}, place_odds={require_place_odds})")
+        if not rows:
+            self._log("[重賞読み込み] 該当レースなし。日付・DB・place_odds フィルタを確認してください。")
+
+    def _get_selected_race_keys(self) -> list[str]:
+        """テーブルでチェックされた行の race_key を返す。"""
+        keys = []
+        for row in range(self.races_table.rowCount()):
+            chk_item = self.races_table.item(row, 0)
+            if chk_item and chk_item.checkState() == Qt.CheckState.Checked:
+                key_item = self.races_table.item(row, 7)
+                if key_item:
+                    keys.append(key_item.text())
+        return keys
+
+    def _on_use_selected_races(self) -> None:
+        """テーブルで選択されたレースの race_key をレースキー欄に設定する。"""
+        keys = self._get_selected_race_keys()
+        if keys:
+            self.racekeys_edit.setText(" ".join(keys))
+            self._log(f"[レース選択] {len(keys)} 件をレースキーに設定: {' '.join(keys)}")
+        else:
+            QMessageBox.information(self, "レース選択", "テーブルでレースにチェックを入れてください。")
+
     # ── ウィジェットヘルパー ──────────────────────────
 
     def _with_browse(self, edit: QLineEdit, file: bool) -> QWidget:
@@ -374,6 +503,7 @@ class MainWindow(QMainWindow):
         self.update_btn.setEnabled(not running)
         self.suggest_btn.setEnabled(not running)
         self.update_suggest_btn.setEnabled(not running)
+        self.load_races_btn.setEnabled(not running)
         self.cancel_btn.setEnabled(running)
 
     # ── Update (RACE) ─────────────────────────────────
@@ -415,7 +545,6 @@ class MainWindow(QMainWindow):
         db = self.db_edit.text().strip()
         out_dir = self.outdir_edit.text().strip()
         model = self.model_edit.text().strip()
-        race_keys_raw = self.racekeys_edit.text().strip()
 
         if not self._require(db, "DB パス"):
             return None
@@ -423,10 +552,15 @@ class MainWindow(QMainWindow):
             return None
         if not self._require(model, "モデルパス"):
             return None
-        if not self._require(race_keys_raw, "レースキー"):
-            return None
 
-        race_keys = race_keys_raw.split()
+        # テーブルで選択されたレースキーを優先し、なければ手動入力を使用
+        race_keys = self._get_selected_race_keys()
+        if not race_keys:
+            race_keys_raw = self.racekeys_edit.text().strip()
+            if not self._require(race_keys_raw, "レースキー (テーブルで選択するか手動入力)"):
+                return None
+            race_keys = race_keys_raw.split()
+
         cmd = [
             sys.executable,
             _script("batch_suggest_place_bets.py"),
