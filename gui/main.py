@@ -26,10 +26,10 @@ from PySide6.QtWidgets import (
     QDateEdit,
     QFileDialog,
     QFormLayout,
-    QGroupBox,
     QHeaderView,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QMainWindow,
     QMessageBox,
@@ -148,13 +148,64 @@ def save_config(data: dict) -> None:
         pass
 
 
+# ── 折り畳みコンテナウィジェット ─────────────────────────────────────────────
+
+class CollapsibleBox(QWidget):
+    """クリックで展開/折り畳みができるセクションウィジェット。"""
+
+    def __init__(self, title: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._collapsed = False
+
+        self._toggle_btn = QPushButton()
+        self._toggle_btn.setCheckable(False)
+        self._toggle_btn.setStyleSheet(
+            "QPushButton { text-align: left; border: none;"
+            " background: palette(button); padding: 4px 6px; font-weight: bold; }"
+            "QPushButton:hover { background: palette(midlight); }"
+        )
+        self._toggle_btn.clicked.connect(self.toggle)
+
+        self._content = QWidget()
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._toggle_btn)
+        layout.addWidget(self._content)
+
+        self._title = title
+        self._update_label()
+
+    def _update_label(self) -> None:
+        arrow = "▶" if self._collapsed else "▼"
+        self._toggle_btn.setText(f"{arrow}  {self._title}")
+
+    def setContentLayout(self, content_layout: QLayout) -> None:
+        """コンテンツ領域にレイアウトをセットする。"""
+        self._content.setLayout(content_layout)
+
+    def toggle(self) -> None:
+        self.setCollapsed(not self._collapsed)
+
+    def isCollapsed(self) -> bool:
+        return self._collapsed
+
+    def setCollapsed(self, collapsed: bool) -> None:
+        if self._collapsed == collapsed:
+            return
+        self._collapsed = collapsed
+        self._content.setVisible(not self._collapsed)
+        self._update_label()
+
+
 # ── メインウィンドウ ──────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Keiba Pipeline GUI")
-        self.resize(740, 1000)
+        self.resize(740, 720)
 
         # 実行中プロセス管理
         self._processes: list[QProcess] = []
@@ -165,8 +216,8 @@ class MainWindow(QMainWindow):
         root_layout = QVBoxLayout(central)
 
         # ── 設定フォーム ──────────────────────────────
-        form_group = QGroupBox("設定")
-        form = QFormLayout(form_group)
+        self._settings_box = CollapsibleBox("設定")
+        form = QFormLayout()
 
         self.db_edit = QLineEdit()
         self.db_edit.setPlaceholderText("jv_data.db")
@@ -202,11 +253,12 @@ class MainWindow(QMainWindow):
         )
         form.addRow("レースキー (手動):", self.racekeys_edit)
 
-        root_layout.addWidget(form_group)
+        self._settings_box.setContentLayout(form)
+        root_layout.addWidget(self._settings_box)
 
         # ── レース選択 ──────────────────────────────────
-        races_group = QGroupBox("レース選択")
-        races_layout = QVBoxLayout(races_group)
+        self._races_box = CollapsibleBox("レース選択")
+        races_layout = QVBoxLayout()
 
         # 1行目: place_odds チェックボックス + 重賞読み込みボタン
         races_ctrl = QHBoxLayout()
@@ -250,7 +302,8 @@ class MainWindow(QMainWindow):
         use_sel_btn.clicked.connect(self._on_use_selected_races)
         races_layout.addWidget(use_sel_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
-        root_layout.addWidget(races_group)
+        self._races_box.setContentLayout(races_layout)
+        root_layout.addWidget(self._races_box)
 
         # ── ボタン ────────────────────────────────────
         btn_layout = QHBoxLayout()
@@ -279,8 +332,8 @@ class MainWindow(QMainWindow):
         root_layout.addLayout(btn_layout)
 
         # ── ログ出力 ──────────────────────────────────
-        log_group = QGroupBox("ログ")
-        log_layout = QVBoxLayout(log_group)
+        self._log_box = CollapsibleBox("ログ")
+        log_layout = QVBoxLayout()
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(5000)
@@ -290,11 +343,12 @@ class MainWindow(QMainWindow):
         clear_btn.clicked.connect(self.log_view.clear)
         log_layout.addWidget(clear_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
-        root_layout.addWidget(log_group)
+        self._log_box.setContentLayout(log_layout)
+        root_layout.addWidget(self._log_box)
 
         # ── 予想結果 ──────────────────────────────────
-        results_group = QGroupBox("予想結果")
-        results_layout = QVBoxLayout(results_group)
+        self._results_box = CollapsibleBox("予想結果")
+        results_layout = QVBoxLayout()
 
         # コントロール行
         results_ctrl = QHBoxLayout()
@@ -340,7 +394,8 @@ class MainWindow(QMainWindow):
         self.pred_table.setMinimumHeight(80)
         results_layout.addWidget(self.pred_table)
 
-        root_layout.addWidget(results_group)
+        self._results_box.setContentLayout(results_layout)
+        root_layout.addWidget(self._results_box)
 
         # ── 設定の読込・デフォルト検出 ────────────────
         self._load_settings()
@@ -405,6 +460,13 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        # 折り畳み状態の復元
+        collapsed = cfg.get("ui_collapsed", {})
+        self._settings_box.setCollapsed(collapsed.get("settings", False))
+        self._races_box.setCollapsed(collapsed.get("races", False))
+        self._log_box.setCollapsed(collapsed.get("log", True))
+        self._results_box.setCollapsed(collapsed.get("results", True))
+
     def _save_settings(self) -> None:
         geom = self.geometry()
         py32_cmd = display_to_py32(self.py32_edit.text())
@@ -422,6 +484,12 @@ class MainWindow(QMainWindow):
                 "y": geom.y(),
                 "width": geom.width(),
                 "height": geom.height(),
+            },
+            "ui_collapsed": {
+                "settings": self._settings_box.isCollapsed(),
+                "races": self._races_box.isCollapsed(),
+                "log": self._log_box.isCollapsed(),
+                "results": self._results_box.isCollapsed(),
             },
         })
 
