@@ -172,10 +172,16 @@ def main() -> None:
     field_sizes = load_field_sizes(conn)
     print(f"[INFO] 既知 race_key: {len(known_keys)} 件")
 
-    # RA7 レコードを取得
+    # RA7 レコードを取得 (payload_text の先頭3文字で絞り込む)
     try:
+        ra7_count = conn.execute(
+            "SELECT COUNT(*) FROM raw_jv_records WHERE substr(payload_text, 1, 3) = 'RA7'"
+        ).fetchone()[0]
+        print(f"[INFO] RA7 レコード: {ra7_count} 件")
+        if ra7_count == 0:
+            print("[WARN] RA7 レコードが見つかりませんでした。payload_text カラムを確認してください。", file=sys.stderr)
         cur = conn.execute(
-            "SELECT payload_text FROM raw_jv_records WHERE dataspec = 'RA'"
+            "SELECT payload_text FROM raw_jv_records WHERE substr(payload_text, 1, 3) = 'RA7'"
         )
     except sqlite3.OperationalError as e:
         print(f"[ERROR] raw_jv_records クエリ失敗: {e}", file=sys.stderr)
