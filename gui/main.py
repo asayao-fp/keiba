@@ -9,6 +9,7 @@ JV-Link 更新 & 複勝買い目提案 GUI (PySide6)
 """
 
 import csv
+import datetime
 import json
 import logging
 import os
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
+    QComboBox,
     QDateEdit,
     QFileDialog,
     QFormLayout,
@@ -54,6 +56,14 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 # scripts/ を sys.path に追加して fetch_races をインポート
 sys.path.insert(0, str(SCRIPTS_DIR))
 from list_races import fetch_races  # noqa: E402
+try:
+    from predict_place import (  # noqa: E402
+        CATEGORICAL_FEATURES as _PRED_CAT_FEATS,
+        FEATURE_COLS as _PRED_FEAT_COLS,
+        NUMERIC_FEATURES as _PRED_NUM_FEATS,
+    )
+except ImportError:
+    _PRED_CAT_FEATS = _PRED_FEAT_COLS = _PRED_NUM_FEATS = None  # type: ignore[assignment]
 
 # 設定ファイルのパス
 CONFIG_PATH = REPO_ROOT / ".keiba_gui_config.json"
@@ -70,6 +80,16 @@ _PRED_TABLE_COLS = ["順位", "馬番", "馬名", "騎手名", "調教師名", "
 _TP_HIGHLIGHT_COLOR = QColor("#c8f5c8")
 # フォールバック順位値 (rank が未設定の場合に使用)
 _RANK_FALLBACK = 9999
+
+# 手動予測セクションの定数
+_TRACK_CONDITION_MAP = {"良": "1", "稍重": "2", "重": "3", "不良": "4"}
+_MANUAL_ENTRY_COLS = ["馬番", "馬名", "騎手", "調教師", "斤量(kg)", "馬体重(kg)"]
+_MANUAL_COL_HORSE_NO = 0
+_MANUAL_COL_HORSE = 1
+_MANUAL_COL_JOCKEY = 2
+_MANUAL_COL_TRAINER = 3
+_MANUAL_COL_HANDICAP = 4
+_MANUAL_COL_BODY_WEIGHT = 5
 
 
 def _script(name: str) -> str:
@@ -220,6 +240,14 @@ class MainWindow(QMainWindow):
         self._processes: list[QProcess] = []
         self._cancelled = False
 
+        # 手動予測セクション用マスタデータキャッシュ
+        self._manual_horse_data: list[tuple[str, str]] = []
+        self._manual_jockey_data: list[tuple[str, str]] = []
+        self._manual_trainer_data: list[tuple[str, str]] = []
+        self._manual_horses_available = False
+        self._manual_jockeys_available = False
+        self._manual_trainers_available = False
+
         central = QWidget()
         self.setCentralWidget(central)
         root_layout = QVBoxLayout(central)
@@ -339,6 +367,68 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(self.cancel_btn)
 
         root_layout.addLayout(btn_layout)
+
+        # ── 当日入力（手動予測）────────────────────────────────
+        self._manual_box = CollapsibleBox("当日入力（手動予測）")
+        manual_layout = QVBoxLayout()
+
+        # レース条件入力フォーム
+        manual_race_form = QFormLayout()
+
+        self.manual_course_edit = QLineEdit()
+        self.manual_course_edit.setPlaceholderText("例: 05 (東京), 06 (中山)")
+        manual_race_form.addRow("競馬場コード *:", self.manual_course_edit)
+
+        self.manual_distance_spin = QSpinBox()
+        self.manual_distance_spin.setRange(0, 9999)
+        self.manual_distance_spin.setValue(0)
+        self.manual_distance_spin.setSuffix(" m")
+        manual_race_form.addRow("距離 * (m):", self.manual_distance_spin)
+
+        self.manual_track_combo = QComboBox()
+        self.manual_track_combo.addItems(list(_TRACK_CONDITION_MAP.keys()))
+        manual_race_form.addRow("馬場状態 *:", self.manual_track_combo)
+
+        self.manual_grade_edit = QLineEdit()
+        self.manual_grade_edit.setPlaceholderText("任意 (例: A, B, C, 15)")
+        manual_race_form.addRow("グレードコード:", self.manual_grade_edit)
+
+        manual_layout.addLayout(manual_race_form)
+
+        # 出走馬テーブルのコントロール行
+        manual_entries_ctrl = QHBoxLayout()
+        manual_entries_ctrl.addWidget(QLabel("出走馬 (* = 必須):"))
+        manual_entries_ctrl.addStretch()
+        manual_load_masters_btn = QPushButton("マスタ読み込み")
+        manual_load_masters_btn.setToolTip("DB から馬・騎手・調教師マスタを読み込んでドロップダウンを更新します")
+        manual_load_masters_btn.clicked.connect(self._on_manual_load_masters)
+        manual_entries_ctrl.addWidget(manual_load_masters_btn)
+        manual_add_row_btn = QPushButton("行追加")
+        manual_add_row_btn.clicked.connect(self._on_manual_add_row)
+        manual_entries_ctrl.addWidget(manual_add_row_btn)
+        manual_remove_row_btn = QPushButton("行削除")
+        manual_remove_row_btn.clicked.connect(self._on_manual_remove_row)
+        manual_entries_ctrl.addWidget(manual_remove_row_btn)
+        manual_layout.addLayout(manual_entries_ctrl)
+
+        # 出走馬テーブル
+        self.manual_table = QTableWidget(0, len(_MANUAL_ENTRY_COLS))
+        self.manual_table.setHorizontalHeaderLabels(_MANUAL_ENTRY_COLS)
+        self.manual_table.horizontalHeader().setSectionResizeMode(
+            _MANUAL_COL_HORSE, QHeaderView.ResizeMode.Stretch
+        )
+        self.manual_table.verticalHeader().setVisible(False)
+        self.manual_table.setMinimumHeight(120)
+        manual_layout.addWidget(self.manual_table)
+
+        # 予測ボタン
+        manual_predict_btn = QPushButton("予測")
+        manual_predict_btn.setMinimumHeight(36)
+        manual_predict_btn.clicked.connect(self._on_manual_predict)
+        manual_layout.addWidget(manual_predict_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+        self._manual_box.setContentLayout(manual_layout)
+        root_layout.addWidget(self._manual_box)
 
         # ── ログ出力 ──────────────────────────────────
         self._log_box = CollapsibleBox("ログ")
@@ -526,6 +616,7 @@ class MainWindow(QMainWindow):
         self._races_box.setCollapsed(collapsed.get("races", False))
         self._log_box.setCollapsed(collapsed.get("log", True))
         self._results_box.setCollapsed(collapsed.get("results", True))
+        self._manual_box.setCollapsed(collapsed.get("manual", True))
 
     def _save_settings(self) -> None:
         geom = self.geometry()
@@ -550,6 +641,7 @@ class MainWindow(QMainWindow):
                 "races": self._races_box.isCollapsed(),
                 "log": self._log_box.isCollapsed(),
                 "results": self._results_box.isCollapsed(),
+                "manual": self._manual_box.isCollapsed(),
             },
         })
 
@@ -1300,6 +1392,325 @@ class MainWindow(QMainWindow):
 
         for line in text.splitlines():
             self._log(line)
+
+    # ── 当日入力（手動予測）────────────────────────────
+
+    def _get_manual_cell(self, row: int, col: int) -> tuple[str, str]:
+        """セルの (表示テキスト, 値) を返す。コンボは (表示名, データ)、テキストは (text, text)。"""
+        widget = self.manual_table.cellWidget(row, col)
+        if widget is None:
+            item = self.manual_table.item(row, col)
+            text = item.text().strip() if item else ""
+            return text, text
+        if isinstance(widget, QComboBox):
+            display = widget.currentText().strip()
+            data = widget.currentData()
+            value = str(data) if (data is not None and data != "") else display
+            return display, value
+        if isinstance(widget, QLineEdit):
+            text = widget.text().strip()
+            return text, text
+        return "", ""
+
+    def _on_manual_load_masters(self) -> None:
+        """DB からマスタデータを読み込んでテーブルのドロップダウンを更新する。"""
+        db = self.db_edit.text().strip()
+        if not db:
+            self._log("[手動予測] DB パスが未設定です。フリーテキスト入力になります。")
+            return
+        if not Path(db).exists():
+            self._log(f"[手動予測] DB ファイルが見つかりません: {db}")
+            return
+        try:
+            conn = sqlite3.connect(db)
+        except Exception as exc:
+            self._log(f"[手動予測] DB 接続失敗: {exc}")
+            return
+
+        try:
+            try:
+                rows = conn.execute(
+                    "SELECT horse_id, horse_name FROM horses ORDER BY horse_name"
+                ).fetchall()
+                self._manual_horse_data = [(r[1], r[0]) for r in rows]
+                self._manual_horses_available = True
+                self._log(f"[手動予測] 馬マスタ: {len(rows)} 件読み込み")
+            except Exception:
+                self._manual_horse_data = []
+                self._manual_horses_available = False
+                self._log("[手動予測] horses テーブルが利用できません。horse_id を直接入力してください。")
+
+            try:
+                rows = conn.execute(
+                    "SELECT jockey_code, jockey_name FROM jockeys ORDER BY jockey_name"
+                ).fetchall()
+                self._manual_jockey_data = [(r[1], r[0]) for r in rows]
+                self._manual_jockeys_available = True
+                self._log(f"[手動予測] 騎手マスタ: {len(rows)} 件読み込み")
+            except Exception:
+                self._manual_jockey_data = []
+                self._manual_jockeys_available = False
+                self._log("[手動予測] jockeys テーブルが利用できません。コードを直接入力してください。")
+
+            try:
+                rows = conn.execute(
+                    "SELECT trainer_code, trainer_name FROM trainers ORDER BY trainer_name"
+                ).fetchall()
+                self._manual_trainer_data = [(r[1], r[0]) for r in rows]
+                self._manual_trainers_available = True
+                self._log(f"[手動予測] 調教師マスタ: {len(rows)} 件読み込み")
+            except Exception:
+                self._manual_trainer_data = []
+                self._manual_trainers_available = False
+                self._log("[手動予測] trainers テーブルが利用できません。コードを直接入力してください。")
+        finally:
+            conn.close()
+
+        for r in range(self.manual_table.rowCount()):
+            self._update_manual_row_widgets(r)
+
+    def _update_manual_row_widgets(self, row: int) -> None:
+        """指定行のウィジェットを現在のマスタデータに合わせて更新する。"""
+        if self._manual_horses_available and self._manual_horse_data:
+            combo = QComboBox()
+            combo.setEditable(True)
+            combo.addItem("", "")
+            for name, horse_id in self._manual_horse_data:
+                combo.addItem(name, horse_id)
+            self.manual_table.setCellWidget(row, _MANUAL_COL_HORSE, combo)
+        else:
+            edit = QLineEdit()
+            edit.setPlaceholderText("horse_id")
+            self.manual_table.setCellWidget(row, _MANUAL_COL_HORSE, edit)
+
+        if self._manual_jockeys_available and self._manual_jockey_data:
+            combo = QComboBox()
+            combo.setEditable(True)
+            combo.addItem("", "")
+            for name, code in self._manual_jockey_data:
+                combo.addItem(name, code)
+            self.manual_table.setCellWidget(row, _MANUAL_COL_JOCKEY, combo)
+        else:
+            edit = QLineEdit()
+            edit.setPlaceholderText("騎手コード")
+            self.manual_table.setCellWidget(row, _MANUAL_COL_JOCKEY, edit)
+
+        if self._manual_trainers_available and self._manual_trainer_data:
+            combo = QComboBox()
+            combo.setEditable(True)
+            combo.addItem("", "")
+            for name, code in self._manual_trainer_data:
+                combo.addItem(name, code)
+            self.manual_table.setCellWidget(row, _MANUAL_COL_TRAINER, combo)
+        else:
+            edit = QLineEdit()
+            edit.setPlaceholderText("調教師コード")
+            self.manual_table.setCellWidget(row, _MANUAL_COL_TRAINER, edit)
+
+    def _on_manual_add_row(self) -> None:
+        """出走馬テーブルに 1 行追加する。"""
+        r = self.manual_table.rowCount()
+        self.manual_table.insertRow(r)
+        self._update_manual_row_widgets(r)
+
+    def _on_manual_remove_row(self) -> None:
+        """出走馬テーブルの最終行を削除する。"""
+        r = self.manual_table.rowCount()
+        if r > 0:
+            self.manual_table.removeRow(r - 1)
+
+    def _on_manual_predict(self) -> None:
+        """入力値を検証して推論を実行し、結果を予測テーブルに表示する。"""
+        errors: list[str] = []
+
+        course_code = self.manual_course_edit.text().strip()
+        if not course_code:
+            errors.append("競馬場コードを入力してください。")
+
+        distance_m = self.manual_distance_spin.value()
+        if distance_m <= 0:
+            errors.append("距離 (m) を 1 以上で入力してください。")
+
+        track_condition_text = self.manual_track_combo.currentText()
+        track_code = _TRACK_CONDITION_MAP.get(track_condition_text, "")
+        grade_code = self.manual_grade_edit.text().strip()
+
+        if self.manual_table.rowCount() == 0:
+            errors.append("出走馬を少なくとも 1 頭入力してください (「行追加」ボタン)。")
+
+        entries: list[dict] = []
+        for row in range(self.manual_table.rowCount()):
+            row_label = f"行 {row + 1}"
+
+            horse_no_item = self.manual_table.item(row, _MANUAL_COL_HORSE_NO)
+            horse_no_text = horse_no_item.text().strip() if horse_no_item else ""
+            if not horse_no_text or not horse_no_text.isdigit():
+                errors.append(f"{row_label}: 馬番を整数で入力してください。")
+                continue
+
+            horse_display, horse_id = self._get_manual_cell(row, _MANUAL_COL_HORSE)
+            if not horse_id:
+                errors.append(f"{row_label}: 馬名 / horse_id を入力してください。")
+                continue
+
+            jockey_display, jockey_code = self._get_manual_cell(row, _MANUAL_COL_JOCKEY)
+            if not jockey_code:
+                errors.append(f"{row_label}: 騎手を入力してください。")
+                continue
+
+            trainer_display, trainer_code = self._get_manual_cell(row, _MANUAL_COL_TRAINER)
+            if not trainer_code:
+                errors.append(f"{row_label}: 調教師を入力してください。")
+                continue
+
+            handicap_item = self.manual_table.item(row, _MANUAL_COL_HANDICAP)
+            handicap_text = handicap_item.text().strip() if handicap_item else ""
+            if not handicap_text:
+                errors.append(f"{row_label}: 斤量を入力してください。")
+                continue
+            try:
+                handicap_weight_x10 = round(float(handicap_text) * 10)
+            except ValueError:
+                errors.append(f"{row_label}: 斤量は数値で入力してください。")
+                continue
+
+            body_weight_item = self.manual_table.item(row, _MANUAL_COL_BODY_WEIGHT)
+            body_weight_text = body_weight_item.text().strip() if body_weight_item else ""
+            if not body_weight_text:
+                errors.append(f"{row_label}: 馬体重 (必須) を入力してください。")
+                continue
+            try:
+                body_weight = int(body_weight_text)
+            except ValueError:
+                errors.append(f"{row_label}: 馬体重は整数で入力してください。")
+                continue
+
+            entries.append({
+                "horse_no": horse_no_text,
+                "horse_id": horse_id,
+                "horse_name": horse_display,
+                "jockey_code": jockey_code,
+                "jockey_name": jockey_display,
+                "trainer_code": trainer_code,
+                "trainer_name": trainer_display,
+                "handicap_weight_x10": handicap_weight_x10,
+                "body_weight": body_weight,
+                "course_code": course_code,
+                "distance_m": distance_m,
+                "track_code": track_code,
+                "grade_code": grade_code,
+            })
+
+        if errors:
+            QMessageBox.warning(
+                self,
+                "入力エラー",
+                "以下の入力を確認してください:\n\n" + "\n".join(f"・{e}" for e in errors),
+            )
+            return
+
+        model_path = self.model_edit.text().strip()
+        if not model_path or not Path(model_path).exists():
+            QMessageBox.warning(
+                self, "エラー", f"モデルファイルが見つかりません:\n{model_path or '(未設定)'}"
+            )
+            return
+
+        try:
+            import pandas as _pd
+            from catboost import CatBoostClassifier as _CBC
+        except ImportError as exc:
+            QMessageBox.critical(
+                self, "インポートエラー", f"必要なライブラリが読み込めません:\n{exc}"
+            )
+            return
+
+        # predict_place の特徴量定義 (モジュール起動時のインポートが失敗した場合は再試行)
+        feat_cols = _PRED_FEAT_COLS
+        num_feats = _PRED_NUM_FEATS
+        cat_feats = _PRED_CAT_FEATS
+        if feat_cols is None:
+            try:
+                from predict_place import (  # noqa: E402
+                    CATEGORICAL_FEATURES as feat_cat,
+                    FEATURE_COLS as feat_all,
+                    NUMERIC_FEATURES as feat_num,
+                )
+                feat_cols, num_feats, cat_feats = feat_all, feat_num, feat_cat
+            except ImportError as exc:
+                QMessageBox.critical(
+                    self, "インポートエラー", f"predict_place モジュールが読み込めません:\n{exc}"
+                )
+                return
+
+        try:
+            model = _CBC()
+            model.load_model(model_path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "モデル読み込みエラー", f"モデルの読み込みに失敗しました:\n{exc}"
+            )
+            return
+
+        df = _pd.DataFrame(entries)
+        for col in num_feats:
+            df[col] = _pd.to_numeric(df[col], errors="coerce")
+        for col in cat_feats:
+            df[col] = df[col].fillna("").astype(str)
+
+        try:
+            proba = model.predict_proba(df[feat_cols].copy())[:, 1]
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "推論エラー", f"予測の実行に失敗しました:\n{exc}"
+            )
+            return
+
+        results: list[dict] = []
+        for i, entry in enumerate(entries):
+            results.append({
+                "horse_no": entry["horse_no"],
+                "horse_id": entry["horse_id"],
+                "horse_name": entry["horse_name"],
+                "jockey_name": entry["jockey_name"],
+                "trainer_name": entry["trainer_name"],
+                "p_place": round(float(proba[i]), 4),
+            })
+
+        results.sort(key=lambda r: r["p_place"], reverse=True)
+        for i, r in enumerate(results, start=1):
+            r["rank"] = i
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = self.outdir_edit.text().strip()
+        if out_dir:
+            pred_path = Path(out_dir) / f"pred_manual_{timestamp}.json"
+            try:
+                pred_path.write_text(
+                    json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+                self._log(f"[手動予測] 予測結果を保存: {pred_path}")
+            except Exception as exc:
+                self._log(f"[手動予測] ファイル保存失敗: {exc}")
+
+        self._pred_rows_cache = results
+        self._apply_pred_filters()
+        self._results_box.setCollapsed(False)
+
+        parts = [f"競馬場: {course_code}", f"{distance_m}m", track_condition_text]
+        if grade_code:
+            parts.append(f"Grade: {grade_code}")
+        parts.append(f"出走{len(entries)}頭")
+        self.race_header_label.setText("手動入力  |  " + "  |  ".join(parts))
+        self.race_header_label.setVisible(True)
+        self.bets_table.setRowCount(0)
+
+        self._log(f"[手動予測] 推論完了: {len(entries)} 頭")
+        for r in results[:3]:
+            self._log(
+                f"  馬番{r['horse_no']} {r.get('horse_name') or r.get('horse_id', '')} "
+                f"p_place={r['p_place']:.4f}"
+            )
 
 
 def main() -> None:
