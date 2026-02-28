@@ -1456,10 +1456,13 @@ class MainWindow(QMainWindow):
                 rows = conn.execute(
                     "SELECT jockey_code, jockey_name FROM jockeys ORDER BY jockey_name"
                 ).fetchall()
-                self._manual_jockey_data = [(f"{r[0]} {r[1]}", r[0]) for r in rows]
-                self._manual_jockeys_available = True
-                self._log(f"[手動予測] 騎手マスタ (jockeys): {len(rows)} 件読み込み")
-                jockey_loaded = True
+                if rows:
+                    self._manual_jockey_data = [(f"{r[1]} ({r[0]})", r[0]) for r in rows]
+                    self._manual_jockeys_available = True
+                    self._log(f"[手動予測] 騎手マスタ (jockeys): {len(rows)} 件読み込み")
+                    jockey_loaded = True
+                else:
+                    self._log("[手動予測] jockeys テーブルは 0 件です。jockey_aliases にフォールバックします。")
             except Exception:
                 pass
             if not jockey_loaded:
@@ -1467,10 +1470,11 @@ class MainWindow(QMainWindow):
                     rows = conn.execute(
                         "SELECT jockey_code, jockey_name_short FROM jockey_aliases ORDER BY jockey_name_short"
                     ).fetchall()
-                    self._manual_jockey_data = [(f"{r[0]} {r[1]}", r[0]) for r in rows]
-                    self._manual_jockeys_available = True
-                    self._log(f"[手動予測] 騎手マスタ (jockey_aliases): {len(rows)} 件読み込み")
-                    jockey_loaded = True
+                    if rows:
+                        self._manual_jockey_data = [(f"{r[1]} ({r[0]})", r[0]) for r in rows]
+                        self._manual_jockeys_available = True
+                        self._log(f"[手動予測] 騎手マスタ (jockey_aliases): {len(rows)} 件読み込み")
+                        jockey_loaded = True
                 except Exception:
                     pass
             if not jockey_loaded:
@@ -1484,10 +1488,13 @@ class MainWindow(QMainWindow):
                 rows = conn.execute(
                     "SELECT trainer_code, trainer_name FROM trainers ORDER BY trainer_name"
                 ).fetchall()
-                self._manual_trainer_data = [(f"{r[0]} {r[1]}", r[0]) for r in rows]
-                self._manual_trainers_available = True
-                self._log(f"[手動予測] 調教師マスタ (trainers): {len(rows)} 件読み込み")
-                trainer_loaded = True
+                if rows:
+                    self._manual_trainer_data = [(f"{r[1]} ({r[0]})", r[0]) for r in rows]
+                    self._manual_trainers_available = True
+                    self._log(f"[手動予測] 調教師マスタ (trainers): {len(rows)} 件読み込み")
+                    trainer_loaded = True
+                else:
+                    self._log("[手動予測] trainers テーブルは 0 件です。trainer_aliases にフォールバックします。")
             except Exception:
                 pass
             if not trainer_loaded:
@@ -1495,10 +1502,11 @@ class MainWindow(QMainWindow):
                     rows = conn.execute(
                         "SELECT trainer_code, trainer_name_short FROM trainer_aliases ORDER BY trainer_name_short"
                     ).fetchall()
-                    self._manual_trainer_data = [(f"{r[0]} {r[1]}", r[0]) for r in rows]
-                    self._manual_trainers_available = True
-                    self._log(f"[手動予測] 調教師マスタ (trainer_aliases): {len(rows)} 件読み込み")
-                    trainer_loaded = True
+                    if rows:
+                        self._manual_trainer_data = [(f"{r[1]} ({r[0]})", r[0]) for r in rows]
+                        self._manual_trainers_available = True
+                        self._log(f"[手動予測] 調教師マスタ (trainer_aliases): {len(rows)} 件読み込み")
+                        trainer_loaded = True
                 except Exception:
                     pass
             if not trainer_loaded:
