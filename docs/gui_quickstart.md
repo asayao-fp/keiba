@@ -183,7 +183,7 @@ DB から取得できない場合は race_key がそのまま表示されます�
 |----|------|
 | 順位 | p_place 降順での予測ランク |
 | 馬番 | 馬番号 |
-| 馬ID | 馬のID |
+| 馬名 | 馬名 (horses テーブルが利用可能な場合。未登録の場合は horse_id を表示) |
 | 騎手名 | 騎手名 (jockeys テーブルが利用可能な場合) |
 | 調教師名 | 調教師名 (trainers テーブルが利用可能な場合) |
 | p_place | 予測複勝圏確率 (4桁) |
@@ -236,6 +236,42 @@ python scripts/batch_suggest_place_bets.py \
 
 出力 CSV は `<出力ディレクトリ>/summary.csv` に生成されます。  
 各レースの予測 JSON は `pred_<race_key>.json`、買い目 JSON は `bets_<race_key>.json` として出力されます。
+
+---
+
+## 馬名マスタ (horses テーブル)
+
+予測テーブルの「馬名」列には `horses` テーブルの馬名が表示されます。  
+`horses` テーブルが存在しない場合や該当する馬が登録されていない場合は horse_id がそのまま表示されます。
+
+### horses テーブルの構築方法
+
+`horses` テーブルは SE レコード (馬毎レース情報) の馬名フィールドから構築します。  
+以下の 2 通りの方法があります:
+
+#### 方法 1: build_tables_from_raw.py を実行する (推奨)
+
+`scripts/build_tables_from_raw.py` は SE レコードを処理する際に自動的に `horses` テーブルも更新します:
+
+```powershell
+python scripts/build_tables_from_raw.py --db jv_data.db
+```
+
+#### 方法 2: jv_ingest_horses.py を単独で実行する
+
+既に `raw_jv_records` に SE レコードが取り込まれている場合は、専用スクリプトで馬名マスタのみを更新できます:
+
+```powershell
+python scripts/jv_ingest_horses.py --db jv_data.db
+```
+
+### horses テーブルのスキーマ
+
+| 列 | 型 | 説明 |
+|----|-----|------|
+| horse_id | TEXT PRIMARY KEY | 血統登録番号 (KettoNum) |
+| horse_name | TEXT NOT NULL | 馬名 (Bamei) |
+| updated_at | TEXT NOT NULL | 最終更新日時 (ISO 8601) |
 
 ---
 
