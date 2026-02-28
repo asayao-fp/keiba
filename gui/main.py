@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QCompleter,
     QDateEdit,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QHeaderView,
@@ -35,6 +36,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QLayout,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -81,6 +84,9 @@ except ImportError:
 
 # 設定ファイルのパス
 CONFIG_PATH = REPO_ROOT / ".keiba_gui_config.json"
+
+# スナップショット保存ディレクトリ (ユーザーホーム下)
+PRESETS_DIR = Path.home() / ".keiba" / "presets"
 
 # レース選択テーブルの列ヘッダー
 _RACE_TABLE_COLS = ["✓", "レース名", "競馬場", "R", "距離", "馬場", "グレード", "race_key"]
@@ -375,6 +381,10 @@ class MainWindow(QMainWindow):
             "レースキー (スペース区切り) — テーブル未選択時の手動入力"
         )
         form.addRow("レースキー (手動):", self.racekeys_edit)
+
+        load_snapshot_btn = QPushButton("履歴から読み込む")
+        load_snapshot_btn.clicked.connect(self._on_load_snapshot)
+        form.addRow("スナップショット:", load_snapshot_btn)
 
         self._settings_box.setContentLayout(form)
         root_layout.addWidget(self._settings_box)
@@ -1568,6 +1578,7 @@ class MainWindow(QMainWindow):
         if cmds is None:
             return
 
+        self._save_snapshot("suggest")
         self._log("=" * 60)
         self._log("[Suggest] batch_suggest_place_bets.py を実行します")
         self._set_running(True)
@@ -1927,6 +1938,7 @@ class MainWindow(QMainWindow):
         cmds = self._build_wide_predict_commands()
         if cmds is None:
             return
+        self._save_snapshot("wide")
         self._log("=" * 60)
         self._log("[ワイド予測] predict_wide.py を実行します")
         self.wide_table.setRowCount(0)
@@ -1962,6 +1974,7 @@ class MainWindow(QMainWindow):
         cmds = self._build_sanrenpuku_predict_commands()
         if cmds is None:
             return
+        self._save_snapshot("sanrenpuku")
         self._log("=" * 60)
         self._log("[3連複予測] predict_sanrenpuku.py を実行します")
         self.sanrenpuku_table.setRowCount(0)
@@ -2580,6 +2593,8 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self._save_snapshot("manual")
+
         model_path = self.model_edit.text().strip()
         if not model_path or not Path(model_path).exists():
             QMessageBox.warning(
@@ -2682,6 +2697,239 @@ class MainWindow(QMainWindow):
                 f"  馬番{r['horse_no']} {r.get('horse_name') or r.get('horse_id', '')} "
                 f"p_place={r['p_place']:.4f}"
             )
+
+    # ── スナップショット履歴 ───────────────────────────
+
+    def _collect_gui_snapshot(self, kind: str) -> dict:
+        """現在の GUI 入力状態をスナップショット dict として収集して返す。"""
+        entries: list[dict] = []
+        for row in range(self.manual_table.rowCount()):
+            horse_no_widget = self.manual_table.cellWidget(row, _MANUAL_COL_HORSE_NO)
+            if isinstance(horse_no_widget, QComboBox):
+                horse_no = horse_no_widget.currentText().strip()
+            else:
+                item = self.manual_table.item(row, _MANUAL_COL_HORSE_NO)
+                horse_no = item.text().strip() if item else ""
+
+            horse_display, horse_id = self._get_manual_cell(row, _MANUAL_COL_HORSE)
+            jockey_display, jockey_code = self._get_manual_cell(row, _MANUAL_COL_JOCKEY)
+            trainer_display, trainer_code = self._get_manual_cell(row, _MANUAL_COL_TRAINER)
+
+            handicap_item = self.manual_table.item(row, _MANUAL_COL_HANDICAP)
+            handicap = handicap_item.text().strip() if handicap_item else ""
+
+            bw_item = self.manual_table.item(row, _MANUAL_COL_BODY_WEIGHT)
+            body_weight = bw_item.text().strip() if bw_item else ""
+
+            entries.append({
+                "horse_no": horse_no,
+                "horse_display": horse_display,
+                "horse_id": horse_id,
+                "jockey_display": jockey_display,
+                "jockey_code": jockey_code,
+                "trainer_display": trainer_display,
+                "trainer_code": trainer_code,
+                "handicap": handicap,
+                "body_weight": body_weight,
+            })
+
+        course_code = self.manual_course_combo.currentData() or self.manual_course_combo.currentText().strip()
+
+        return {
+            "snapshot_type": kind,
+            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "db_path": self.db_edit.text().strip(),
+            "model_path": self.model_edit.text().strip(),
+            "out_dir": self.outdir_edit.text().strip(),
+            "race_keys": self.racekeys_edit.text().strip(),
+            "date": self.date_edit.date().toString("yyyyMMdd"),
+            "course_code": course_code,
+            "distance_m": self.manual_distance_spin.value(),
+            "track_condition": self.manual_track_combo.currentText(),
+            "grade_code": self.manual_grade_edit.text().strip(),
+            "surface": self.manual_surface_combo.currentText(),
+            "entries": entries,
+            "wide_model": self.wide_model_edit.text().strip(),
+            "sanrenpuku_model": self.sanrenpuku_model_edit.text().strip(),
+            "topn": self.combo_topn_spin.value(),
+        }
+
+    def _save_snapshot(self, kind: str) -> None:
+        """現在の GUI 状態を ~/.keiba/presets/ にタイムスタンプ付きで保存する。"""
+        try:
+            PRESETS_DIR.mkdir(parents=True, exist_ok=True)
+            data = self._collect_gui_snapshot(kind)
+            ts = data["timestamp"]
+            path = PRESETS_DIR / f"{ts}_{kind}.json"
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._log(f"[履歴] スナップショットを保存: {path.name}")
+        except Exception as exc:
+            self._log(f"[履歴] スナップショット保存失敗: {exc}")
+
+    def _apply_snapshot(self, data: dict) -> None:
+        """スナップショット dict の内容を GUI に反映する。"""
+        if "db_path" in data:
+            self.db_edit.setText(data["db_path"])
+        if "model_path" in data:
+            self.model_edit.setText(data["model_path"])
+        if "out_dir" in data:
+            self.outdir_edit.setText(data["out_dir"])
+        if "race_keys" in data:
+            self.racekeys_edit.setText(data["race_keys"])
+        if "date" in data:
+            d = QDate.fromString(data["date"], "yyyyMMdd")
+            if d.isValid():
+                self.date_edit.setDate(d)
+
+        if "course_code" in data:
+            code = data["course_code"]
+            idx = self.manual_course_combo.findData(code)
+            if idx >= 0:
+                self.manual_course_combo.setCurrentIndex(idx)
+            else:
+                self.manual_course_combo.setCurrentText(code)
+        if "distance_m" in data:
+            self.manual_distance_spin.setValue(data["distance_m"])
+        if "track_condition" in data:
+            idx = self.manual_track_combo.findText(data["track_condition"])
+            if idx >= 0:
+                self.manual_track_combo.setCurrentIndex(idx)
+        if "grade_code" in data:
+            self.manual_grade_edit.setText(data["grade_code"])
+        if "surface" in data:
+            idx = self.manual_surface_combo.findText(data["surface"])
+            if idx >= 0:
+                self.manual_surface_combo.setCurrentIndex(idx)
+
+        if "entries" in data:
+            self.manual_table.setRowCount(0)
+            for entry in data["entries"]:
+                r = self.manual_table.rowCount()
+                self.manual_table.insertRow(r)
+                self._update_manual_row_widgets(r)
+
+                horse_no_widget = self.manual_table.cellWidget(r, _MANUAL_COL_HORSE_NO)
+                if isinstance(horse_no_widget, QComboBox):
+                    idx = horse_no_widget.findText(entry.get("horse_no", ""))
+                    if idx >= 0:
+                        horse_no_widget.setCurrentIndex(idx)
+
+                horse_widget = self.manual_table.cellWidget(r, _MANUAL_COL_HORSE)
+                if isinstance(horse_widget, QLineEdit):
+                    horse_widget.setText(entry.get("horse_display") or entry.get("horse_id", ""))
+
+                jockey_widget = self.manual_table.cellWidget(r, _MANUAL_COL_JOCKEY)
+                if isinstance(jockey_widget, QLineEdit):
+                    jockey_widget.setText(entry.get("jockey_display") or entry.get("jockey_code", ""))
+
+                trainer_widget = self.manual_table.cellWidget(r, _MANUAL_COL_TRAINER)
+                if isinstance(trainer_widget, QLineEdit):
+                    trainer_widget.setText(entry.get("trainer_display") or entry.get("trainer_code", ""))
+
+                self.manual_table.setItem(r, _MANUAL_COL_HANDICAP, QTableWidgetItem(entry.get("handicap", "")))
+                self.manual_table.setItem(r, _MANUAL_COL_BODY_WEIGHT, QTableWidgetItem(entry.get("body_weight", "")))
+
+        if "wide_model" in data:
+            self.wide_model_edit.setText(data["wide_model"])
+        if "sanrenpuku_model" in data:
+            self.sanrenpuku_model_edit.setText(data["sanrenpuku_model"])
+        if "topn" in data:
+            self.combo_topn_spin.setValue(data["topn"])
+
+        kind = data.get("snapshot_type", "")
+        ts = data.get("timestamp", "")
+        self._log(f"[履歴] スナップショットを読み込みました: {kind}  {ts}")
+
+    def _on_load_snapshot(self) -> None:
+        """スナップショット履歴ダイアログを表示し、選択されたスナップショットを復元する。"""
+        if not PRESETS_DIR.exists():
+            QMessageBox.information(self, "履歴", "保存されたスナップショットがありません。")
+            return
+
+        files = sorted(PRESETS_DIR.glob("*.json"), reverse=True)
+        if not files:
+            QMessageBox.information(self, "履歴", "保存されたスナップショットがありません。")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("スナップショット履歴")
+        dlg.resize(500, 380)
+        layout = QVBoxLayout(dlg)
+
+        layout.addWidget(QLabel("読み込むスナップショットを選択してください:"))
+
+        list_widget = QListWidget()
+        for f in files:
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+                kind = d.get("snapshot_type", "")
+                ts = d.get("timestamp", f.stem)
+                label = f"{ts}  [{kind}]"
+            except Exception:
+                label = f.stem
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, str(f))
+            list_widget.addItem(item)
+        layout.addWidget(list_widget)
+
+        btn_row = QHBoxLayout()
+        load_btn = QPushButton("読み込む")
+        load_btn.setEnabled(False)
+        delete_btn = QPushButton("削除")
+        delete_btn.setEnabled(False)
+        cancel_btn = QPushButton("キャンセル")
+        btn_row.addWidget(load_btn)
+        btn_row.addWidget(delete_btn)
+        btn_row.addStretch()
+        btn_row.addWidget(cancel_btn)
+        layout.addLayout(btn_row)
+
+        def _on_selection_changed() -> None:
+            has = bool(list_widget.selectedItems())
+            load_btn.setEnabled(has)
+            delete_btn.setEnabled(has)
+
+        list_widget.itemSelectionChanged.connect(_on_selection_changed)
+        list_widget.itemDoubleClicked.connect(lambda _item: _on_load())
+        cancel_btn.clicked.connect(dlg.reject)
+
+        def _on_load() -> None:
+            selected = list_widget.selectedItems()
+            if not selected:
+                return
+            path = Path(selected[0].data(Qt.ItemDataRole.UserRole))
+            try:
+                snap = json.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                QMessageBox.critical(dlg, "エラー", f"ファイル読み込み失敗:\n{exc}")
+                return
+            dlg.accept()
+            self._apply_snapshot(snap)
+
+        def _on_delete() -> None:
+            selected = list_widget.selectedItems()
+            if not selected:
+                return
+            path = Path(selected[0].data(Qt.ItemDataRole.UserRole))
+            reply = QMessageBox.question(
+                dlg,
+                "確認",
+                f"削除しますか？\n{path.name}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                path.unlink()
+                row = list_widget.row(selected[0])
+                list_widget.takeItem(row)
+            except Exception as exc:
+                QMessageBox.critical(dlg, "エラー", f"削除失敗:\n{exc}")
+
+        load_btn.clicked.connect(_on_load)
+        delete_btn.clicked.connect(_on_delete)
+
+        dlg.exec()
 
 
 def main() -> None:
