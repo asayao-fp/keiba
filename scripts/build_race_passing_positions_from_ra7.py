@@ -16,6 +16,7 @@ import sys
 
 DEFAULT_DB_PATH = "jv_data.db"
 DEFAULT_TAIL_LEN = 900
+DEBUG_TAIL_PREVIEW_MAX_LEN = 200
 
 # RA7 レコード先頭の固定ヘッダ長 (RecordSpec=2, DataKubun=1, MakeDate=8 = 11)
 # race_key は先頭 16 バイト (yyyymmdd=8 + JoCode=2 + Kai=2 + Nichime=2 + RaceNo=2)
@@ -86,67 +87,55 @@ def extract_corner_positions(
     """
     RA7 テキストから各コーナー通過順を抽出する。
 
-    全角スペースを半角に正規化し、末尾 tail_len 文字を数字のみの文字列に変換して
-    コーナーブロックパターン 1[block]2[block]3[block]4[block] を探索する。
-    (block = field_size * 2 桁、各馬番は2桁ゼロパディング)
+    全角スペースを半角に正規化してスペースを折り畳み、末尾 tail_len 文字を
+    空白区切りのブロックに分割する。各ブロックの先頭文字がコーナー番号 (1–4) で
+    あれば、残りのテキストから re.findall(r'\\d{1,2}') で馬番を抽出する。
+    同じコーナー番号のブロックが複数ある場合は '=4' を含むものを優先する。
 
     Returns: {corner: [horse_no_int, ...]} (corner = 1..4)
     """
-    # 全角スペース → 半角スペースへ正規化
+    if field_size <= 0:
+        return {}
+
+    # 全角スペース → 半角スペース、連続空白を折り畳む
     normalized = text.replace('\u3000', ' ')
     tail = normalized[-tail_len:]
 
-    # 数字のみ抽出
-    digits = re.sub(r'\D', '', tail)
+    # コーナーごとの候補セグメントを収集
+    # 空白で区切られた各トークン (ブロック) を走査し、先頭文字がコーナー番号かどうかを確認
+    corner_candidates: dict[int, str] = {}
+    for seg in re.split(r'\s+', tail):
+        seg = seg.strip()
+        if not seg:
+            continue
+        m = re.match(r'^([1-4])', seg)
+        if not m:
+            continue
+        corner = int(m.group(1))
+        # '=4' を含むセグメントを優先し、同優先度では長いセグメントを選ぶ
+        existing = corner_candidates.get(corner)
+        if existing is None:
+            corner_candidates[corner] = seg
+        elif '=4' in seg and '=4' not in existing:
+            corner_candidates[corner] = seg
+        elif '=4' not in seg and '=4' not in existing and len(seg) > len(existing):
+            corner_candidates[corner] = seg
 
     corners: dict = {}
-
-    if field_size <= 0:
-        return corners
-
-    block = field_size * 2           # コーナーごとの桁数 (馬番 2桁 × 頭数)
-    total_len = 4 * (1 + block)      # 4コーナー分: 各 (1マーカー + block桁)
-
-    for i in range(len(digits) - total_len + 1):
-        if digits[i] != '1':
-            continue
-
-        # 各コーナーマーカーの位置を計算
-        m1 = i
-        m2 = m1 + 1 + block
-        m3 = m2 + 1 + block
-        m4 = m3 + 1 + block
-        end = m4 + 1 + block
-
-        if end > len(digits):
-            break
-
-        # コーナーマーカー 2, 3, 4 の確認
-        if digits[m2] != '2' or digits[m3] != '3' or digits[m4] != '4':
-            continue
-
-        # 各コーナーの馬番を抽出
-        for corner, (start, stop) in enumerate(
-            [(m1 + 1, m2), (m2 + 1, m3), (m3 + 1, m4), (m4 + 1, end)],
-            start=1,
-        ):
-            chunk = digits[start:stop]
-            positions: list = []
-            seen: set = set()
-            for j in range(0, len(chunk), 2):
-                if j + 2 > len(chunk):
+    for corner, seg in corner_candidates.items():
+        # 先頭のコーナー番号文字を除いた残りから馬番を抽出
+        rest = seg[1:]
+        positions: list = []
+        seen: set = set()
+        for num_str in re.findall(r'\d{1,2}', rest):
+            n = int(num_str)
+            if 1 <= n <= MAX_HORSE_NO and n in valid_horse_nos and n not in seen:
+                positions.append(n)
+                seen.add(n)
+                if len(positions) >= field_size:
                     break
-                hn = int(chunk[j : j + 2])
-                if hn == 0:
-                    continue  # ゼロパディング (未使用スロット)
-                if 1 <= hn <= MAX_HORSE_NO and hn in valid_horse_nos and hn not in seen:
-                    positions.append(hn)
-                    seen.add(hn)
-            if positions:
-                corners[corner] = positions
-
-        if corners:
-            break
+        if positions:
+            corners[corner] = positions
 
     return corners
 
@@ -167,6 +156,13 @@ def main() -> None:
         default=DEFAULT_TAIL_LEN,
         metavar="N",
         help=f"RA7 レコード末尾から参照する文字数 (デフォルト: {DEFAULT_TAIL_LEN})",
+    )
+    parser.add_argument(
+        "--debug-sample",
+        type=int,
+        default=0,
+        metavar="N",
+        help="コーナー情報なしでスキップされた際、末尾セグメントを最大 N 件表示する",
     )
     args = parser.parse_args()
 
@@ -241,6 +237,9 @@ def main() -> None:
         corners = extract_corner_positions(payload, field_size, valid_horse_nos, args.tail_len)
         if not corners:
             skipped_no_corners += 1
+            if args.debug_sample > 0 and skipped_no_corners <= args.debug_sample:
+                tail_preview = repr(payload[-(min(args.tail_len, DEBUG_TAIL_PREVIEW_MAX_LEN)):])
+                print(f"[DEBUG] コーナー情報なし (race_key={race_key}): tail={tail_preview}", file=sys.stderr)
             continue
 
         added = 0
