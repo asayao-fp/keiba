@@ -161,6 +161,14 @@ def init_normalized_tables(conn: sqlite3.Connection) -> None:
             created_at      TEXT    NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS horse_latest_metrics (
+            horse_id             TEXT PRIMARY KEY,
+            handicap_weight_x10  INTEGER,
+            body_weight          INTEGER,
+            race_key             TEXT,
+            updated_at           TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS entries (
             entry_key   TEXT    PRIMARY KEY,
             race_key    TEXT    NOT NULL REFERENCES races(race_key),
@@ -334,6 +342,40 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                     """,
                     (rec["horse_id"], rec["horse_name"], now),
                 )
+            if rec["horse_id"] and rec["race_key"] and (
+                rec["handicap_weight_x10"] is not None or rec["body_weight"] is not None
+            ):
+                conn.execute(
+                    """
+                    INSERT INTO horse_latest_metrics
+                        (horse_id, handicap_weight_x10, body_weight, race_key, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(horse_id) DO UPDATE SET
+                        handicap_weight_x10 = CASE
+                            WHEN excluded.race_key >= race_key
+                            THEN COALESCE(excluded.handicap_weight_x10, handicap_weight_x10)
+                            ELSE handicap_weight_x10
+                        END,
+                        body_weight = CASE
+                            WHEN excluded.race_key >= race_key
+                            THEN COALESCE(excluded.body_weight, body_weight)
+                            ELSE body_weight
+                        END,
+                        race_key = CASE
+                            WHEN excluded.race_key >= race_key
+                            THEN excluded.race_key
+                            ELSE race_key
+                        END,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        rec["horse_id"],
+                        rec["handicap_weight_x10"],
+                        rec["body_weight"],
+                        rec["race_key"],
+                        now,
+                    ),
+                )
             if rec["jockey_code"] and rec["jockey_name_short"]:
                 conn.execute(
                     """
@@ -379,12 +421,14 @@ def build_tables(db_path: str, graded_only: bool) -> None:
     horse_total  = conn.execute("SELECT COUNT(*) FROM horses").fetchone()[0]
     jockey_alias_total  = conn.execute("SELECT COUNT(*) FROM jockey_aliases").fetchone()[0]
     trainer_alias_total = conn.execute("SELECT COUNT(*) FROM trainer_aliases").fetchone()[0]
+    metrics_total = conn.execute("SELECT COUNT(*) FROM horse_latest_metrics").fetchone()[0]
 
     conn.close()
 
     print(f"[INFO] RA パース: {ra_count} 件 → races テーブル: {race_total} 件")
     print(f"[INFO] SE パース: {se_count} 件 → entries テーブル: {entry_total} 件, horses テーブル: {horse_total} 件")
     print(f"[INFO] jockey_aliases: {jockey_alias_total} 件, trainer_aliases: {trainer_alias_total} 件")
+    print(f"[INFO] horse_latest_metrics: {metrics_total} 件")
 
 
 def parse_args():

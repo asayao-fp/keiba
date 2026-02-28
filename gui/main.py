@@ -91,6 +91,20 @@ _MANUAL_COL_TRAINER = 3
 _MANUAL_COL_HANDICAP = 4
 _MANUAL_COL_BODY_WEIGHT = 5
 
+# JRA 競馬場コード一覧 (表示名, コード)
+_COURSE_CODES: list[tuple[str, str]] = [
+    ("札幌 (01)", "01"),
+    ("函館 (02)", "02"),
+    ("福島 (03)", "03"),
+    ("新潟 (04)", "04"),
+    ("東京 (05)", "05"),
+    ("中山 (06)", "06"),
+    ("中京 (07)", "07"),
+    ("京都 (08)", "08"),
+    ("阪神 (09)", "09"),
+    ("小倉 (10)", "10"),
+]
+
 
 def _script(name: str) -> str:
     return str(SCRIPTS_DIR / name)
@@ -375,9 +389,12 @@ class MainWindow(QMainWindow):
         # レース条件入力フォーム
         manual_race_form = QFormLayout()
 
-        self.manual_course_edit = QLineEdit()
-        self.manual_course_edit.setPlaceholderText("例: 05 (東京), 06 (中山)")
-        manual_race_form.addRow("競馬場コード *:", self.manual_course_edit)
+        self.manual_course_combo = QComboBox()
+        self.manual_course_combo.setEditable(True)
+        for label, code in _COURSE_CODES:
+            self.manual_course_combo.addItem(label, code)
+        self.manual_course_combo.lineEdit().setPlaceholderText("例: 05 (東京), 06 (中山)")
+        manual_race_form.addRow("競馬場コード *:", self.manual_course_combo)
 
         self.manual_distance_spin = QSpinBox()
         self.manual_distance_spin.setRange(0, 9999)
@@ -1422,6 +1439,96 @@ class MainWindow(QMainWindow):
             return text, text
         return "", ""
 
+    def _lookup_latest_metrics(self, horse_id: str) -> dict | None:
+        """horse_id の最新斤量・馬体重を DB から取得する。
+
+        優先順位:
+        1. horse_latest_metrics テーブル (高速)
+        2. entries テーブルの最新 race_key (フォールバック)
+
+        戻り値: {"handicap_weight_x10": int | None, "body_weight": int | None, "source": str}
+        見つからない場合は None を返す。
+        """
+        db = self.db_edit.text().strip()
+        if not db or not Path(db).exists():
+            return None
+        try:
+            with sqlite3.connect(db) as conn:
+                # 1. horse_latest_metrics テーブルを試みる
+                try:
+                    row = conn.execute(
+                        "SELECT handicap_weight_x10, body_weight FROM horse_latest_metrics"
+                        " WHERE horse_id = ?",
+                        (horse_id,),
+                    ).fetchone()
+                    if row and (row[0] is not None or row[1] is not None):
+                        return {
+                            "handicap_weight_x10": row[0],
+                            "body_weight": row[1],
+                            "source": "horse_latest_metrics",
+                        }
+                except Exception:
+                    pass
+
+                # 2. entries テーブルからフォールバック
+                try:
+                    row = conn.execute(
+                        "SELECT handicap_weight_x10, body_weight FROM entries"
+                        " WHERE horse_id = ?"
+                        "   AND (handicap_weight_x10 IS NOT NULL OR body_weight IS NOT NULL)"
+                        " ORDER BY race_key DESC LIMIT 1",
+                        (horse_id,),
+                    ).fetchone()
+                    if row and (row[0] is not None or row[1] is not None):
+                        return {
+                            "handicap_weight_x10": row[0],
+                            "body_weight": row[1],
+                            "source": "entries",
+                        }
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return None
+
+    def _on_manual_horse_changed(self, row: int) -> None:
+        """馬コンボの選択が変わったときに斤量・馬体重を自動入力する (空欄の場合のみ)。"""
+        _display, horse_id = self._get_manual_cell(row, _MANUAL_COL_HORSE)
+        if not horse_id:
+            return
+
+        metrics = self._lookup_latest_metrics(horse_id)
+        if metrics is None:
+            return
+
+        filled_any = False
+
+        # 斤量: 空のセルのみ更新
+        handicap_item = self.manual_table.item(row, _MANUAL_COL_HANDICAP)
+        handicap_text = handicap_item.text().strip() if handicap_item else ""
+        if not handicap_text and metrics.get("handicap_weight_x10") is not None:
+            hw = metrics["handicap_weight_x10"]
+            self.manual_table.setItem(
+                row, _MANUAL_COL_HANDICAP, QTableWidgetItem(f"{hw / 10:.1f}")
+            )
+            filled_any = True
+
+        # 馬体重: 空のセルのみ更新
+        bw_item = self.manual_table.item(row, _MANUAL_COL_BODY_WEIGHT)
+        bw_text = bw_item.text().strip() if bw_item else ""
+        if not bw_text and metrics.get("body_weight") is not None:
+            bw = metrics["body_weight"]
+            self.manual_table.setItem(
+                row, _MANUAL_COL_BODY_WEIGHT, QTableWidgetItem(str(bw))
+            )
+            filled_any = True
+
+        if filled_any:
+            self._log(
+                f"[手動予測] 行{row + 1} 馬 {horse_id}: 斤量/馬体重を自動入力"
+                f" (source: {metrics['source']})"
+            )
+
     def _on_manual_load_masters(self) -> None:
         """DB からマスタデータを読み込んでテーブルのドロップダウンを更新する。"""
         db = self.db_edit.text().strip()
@@ -1527,10 +1634,12 @@ class MainWindow(QMainWindow):
             combo.addItem("", "")
             for name, horse_id in self._manual_horse_data:
                 combo.addItem(name, horse_id)
+            combo.activated.connect(lambda _idx, r=row: self._on_manual_horse_changed(r))
             self.manual_table.setCellWidget(row, _MANUAL_COL_HORSE, combo)
         else:
             edit = QLineEdit()
             edit.setPlaceholderText("horse_id")
+            edit.editingFinished.connect(lambda r=row: self._on_manual_horse_changed(r))
             self.manual_table.setCellWidget(row, _MANUAL_COL_HORSE, edit)
 
         if self._manual_jockeys_available and self._manual_jockey_data:
@@ -1611,7 +1720,10 @@ class MainWindow(QMainWindow):
         """入力値を検証して推論を実行し、結果を予測テーブルに表示する。"""
         errors: list[str] = []
 
-        course_code = self.manual_course_edit.text().strip()
+        course_code = self.manual_course_combo.currentData()
+        if not course_code:
+            # fall back to the edited text if no item data (e.g. user typed manually)
+            course_code = self.manual_course_combo.currentText().strip()
         if not course_code:
             errors.append("競馬場コードを入力してください。")
 
