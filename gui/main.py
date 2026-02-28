@@ -403,6 +403,16 @@ class MainWindow(QMainWindow):
         manual_load_masters_btn.setToolTip("DB から馬・騎手・調教師マスタを読み込んでドロップダウンを更新します")
         manual_load_masters_btn.clicked.connect(self._on_manual_load_masters)
         manual_entries_ctrl.addWidget(manual_load_masters_btn)
+        manual_entries_ctrl.addWidget(QLabel("出走頭数:"))
+        self.manual_nhorses_spin = QSpinBox()
+        self.manual_nhorses_spin.setRange(1, 18)
+        self.manual_nhorses_spin.setValue(18)
+        self.manual_nhorses_spin.setFixedWidth(52)
+        manual_entries_ctrl.addWidget(self.manual_nhorses_spin)
+        manual_gen_rows_btn = QPushButton("行生成")
+        manual_gen_rows_btn.setToolTip("指定した頭数で行をリセットし、馬番を 1..N で自動入力します")
+        manual_gen_rows_btn.clicked.connect(self._on_manual_gen_rows)
+        manual_entries_ctrl.addWidget(manual_gen_rows_btn)
         manual_add_row_btn = QPushButton("行追加")
         manual_add_row_btn.clicked.connect(self._on_manual_add_row)
         manual_entries_ctrl.addWidget(manual_add_row_btn)
@@ -1440,29 +1450,61 @@ class MainWindow(QMainWindow):
                 self._manual_horses_available = False
                 self._log("[手動予測] horses テーブルが利用できません。horse_id を直接入力してください。")
 
+            # 騎手: jockeys (full name) → jockey_aliases (short name) → free text
+            jockey_loaded = False
             try:
                 rows = conn.execute(
                     "SELECT jockey_code, jockey_name FROM jockeys ORDER BY jockey_name"
                 ).fetchall()
-                self._manual_jockey_data = [(r[1], r[0]) for r in rows]
+                self._manual_jockey_data = [(f"{r[0]} {r[1]}", r[0]) for r in rows]
                 self._manual_jockeys_available = True
-                self._log(f"[手動予測] 騎手マスタ: {len(rows)} 件読み込み")
+                self._log(f"[手動予測] 騎手マスタ (jockeys): {len(rows)} 件読み込み")
+                jockey_loaded = True
             except Exception:
+                pass
+            if not jockey_loaded:
+                try:
+                    rows = conn.execute(
+                        "SELECT jockey_code, jockey_name_short FROM jockey_aliases ORDER BY jockey_name_short"
+                    ).fetchall()
+                    self._manual_jockey_data = [(f"{r[0]} {r[1]}", r[0]) for r in rows]
+                    self._manual_jockeys_available = True
+                    self._log(f"[手動予測] 騎手マスタ (jockey_aliases): {len(rows)} 件読み込み")
+                    jockey_loaded = True
+                except Exception:
+                    pass
+            if not jockey_loaded:
                 self._manual_jockey_data = []
                 self._manual_jockeys_available = False
-                self._log("[手動予測] jockeys テーブルが利用できません。コードを直接入力してください。")
+                self._log("[手動予測] jockeys / jockey_aliases テーブルが利用できません。コードを直接入力してください。")
 
+            # 調教師: trainers (full name) → trainer_aliases (short name) → free text
+            trainer_loaded = False
             try:
                 rows = conn.execute(
                     "SELECT trainer_code, trainer_name FROM trainers ORDER BY trainer_name"
                 ).fetchall()
-                self._manual_trainer_data = [(r[1], r[0]) for r in rows]
+                self._manual_trainer_data = [(f"{r[0]} {r[1]}", r[0]) for r in rows]
                 self._manual_trainers_available = True
-                self._log(f"[手動予測] 調教師マスタ: {len(rows)} 件読み込み")
+                self._log(f"[手動予測] 調教師マスタ (trainers): {len(rows)} 件読み込み")
+                trainer_loaded = True
             except Exception:
+                pass
+            if not trainer_loaded:
+                try:
+                    rows = conn.execute(
+                        "SELECT trainer_code, trainer_name_short FROM trainer_aliases ORDER BY trainer_name_short"
+                    ).fetchall()
+                    self._manual_trainer_data = [(f"{r[0]} {r[1]}", r[0]) for r in rows]
+                    self._manual_trainers_available = True
+                    self._log(f"[手動予測] 調教師マスタ (trainer_aliases): {len(rows)} 件読み込み")
+                    trainer_loaded = True
+                except Exception:
+                    pass
+            if not trainer_loaded:
                 self._manual_trainer_data = []
                 self._manual_trainers_available = False
-                self._log("[手動予測] trainers テーブルが利用できません。コードを直接入力してください。")
+                self._log("[手動予測] trainers / trainer_aliases テーブルが利用できません。コードを直接入力してください。")
         finally:
             conn.close()
 
@@ -1518,6 +1560,44 @@ class MainWindow(QMainWindow):
         r = self.manual_table.rowCount()
         if r > 0:
             self.manual_table.removeRow(r - 1)
+
+    def _on_manual_gen_rows(self) -> None:
+        """出走頭数 N でテーブルをリセットし、馬番を 1..N で自動入力する。"""
+        n = self.manual_nhorses_spin.value()
+        # 既存行にデータがある場合は確認ダイアログを表示
+        if self.manual_table.rowCount() > 0:
+            has_data = False
+            for row in range(self.manual_table.rowCount()):
+                for col in range(self.manual_table.columnCount()):
+                    widget = self.manual_table.cellWidget(row, col)
+                    if widget is not None:
+                        if isinstance(widget, QComboBox) and widget.currentText().strip():
+                            has_data = True
+                            break
+                        if isinstance(widget, QLineEdit) and widget.text().strip():
+                            has_data = True
+                            break
+                    item = self.manual_table.item(row, col)
+                    if item and item.text().strip():
+                        has_data = True
+                        break
+                if has_data:
+                    break
+            if has_data:
+                reply = QMessageBox.question(
+                    self,
+                    "確認",
+                    f"現在の入力内容をクリアして {n} 頭分の行を生成しますか？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
+        self.manual_table.setRowCount(0)
+        for i in range(1, n + 1):
+            r = self.manual_table.rowCount()
+            self.manual_table.insertRow(r)
+            self.manual_table.setItem(r, _MANUAL_COL_HORSE_NO, QTableWidgetItem(str(i)))
+            self._update_manual_row_widgets(r)
 
     def _on_manual_predict(self) -> None:
         """入力値を検証して推論を実行し、結果を予測テーブルに表示する。"""

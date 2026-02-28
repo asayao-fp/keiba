@@ -90,8 +90,10 @@ def parse_se(payload: str):
     horse_id   = _sb(b, 31, 10)
     horse_name = _sb(b, 41, 36).strip(" \u3000")
     trainer_code         = _sb(b, 86, 5)
+    trainer_name_short   = _sb(b, 91, 8).strip(" \u3000")
     handicap_weight_raw  = _sb(b, 289, 3).strip()
     jockey_code          = _sb(b, 297, 5)
+    jockey_name_short    = _sb(b, 307, 8).strip(" \u3000")
     body_weight_raw      = _sb(b, 325, 3).strip()
     finish_raw           = _sb(b, 335, 2).strip()
 
@@ -134,7 +136,9 @@ def parse_se(payload: str):
         "horse_id":            horse_id,
         "horse_name":          horse_name,
         "jockey_code":         jockey_code,
+        "jockey_name_short":   jockey_name_short,
         "trainer_code":        trainer_code,
+        "trainer_name_short":  trainer_name_short,
         "body_weight":         body_weight,
         "handicap_weight_x10": handicap_weight_x10,
         "finish_pos":          finish_pos,
@@ -183,6 +187,18 @@ def init_normalized_tables(conn: sqlite3.Connection) -> None:
             horse_id    TEXT    PRIMARY KEY,
             horse_name  TEXT    NOT NULL,
             updated_at  TEXT    NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS jockey_aliases (
+            jockey_code      TEXT PRIMARY KEY,
+            jockey_name_short TEXT NOT NULL,
+            updated_at        TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS trainer_aliases (
+            trainer_code       TEXT PRIMARY KEY,
+            trainer_name_short TEXT NOT NULL,
+            updated_at         TEXT NOT NULL
         );
         """
     )
@@ -318,6 +334,28 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                     """,
                     (rec["horse_id"], rec["horse_name"], now),
                 )
+            if rec["jockey_code"] and rec["jockey_name_short"]:
+                conn.execute(
+                    """
+                    INSERT INTO jockey_aliases (jockey_code, jockey_name_short, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(jockey_code) DO UPDATE SET
+                        jockey_name_short = excluded.jockey_name_short,
+                        updated_at        = excluded.updated_at
+                    """,
+                    (rec["jockey_code"], rec["jockey_name_short"], now),
+                )
+            if rec["trainer_code"] and rec["trainer_name_short"]:
+                conn.execute(
+                    """
+                    INSERT INTO trainer_aliases (trainer_code, trainer_name_short, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(trainer_code) DO UPDATE SET
+                        trainer_name_short = excluded.trainer_name_short,
+                        updated_at         = excluded.updated_at
+                    """,
+                    (rec["trainer_code"], rec["trainer_name_short"], now),
+                )
             se_count += 1
             processed += 1
             if processed % 50_000 == 0:
@@ -339,11 +377,14 @@ def build_tables(db_path: str, graded_only: bool) -> None:
     race_total   = conn.execute("SELECT COUNT(*) FROM races").fetchone()[0]
     entry_total  = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
     horse_total  = conn.execute("SELECT COUNT(*) FROM horses").fetchone()[0]
+    jockey_alias_total  = conn.execute("SELECT COUNT(*) FROM jockey_aliases").fetchone()[0]
+    trainer_alias_total = conn.execute("SELECT COUNT(*) FROM trainer_aliases").fetchone()[0]
 
     conn.close()
 
     print(f"[INFO] RA パース: {ra_count} 件 → races テーブル: {race_total} 件")
     print(f"[INFO] SE パース: {se_count} 件 → entries テーブル: {entry_total} 件, horses テーブル: {horse_total} 件")
+    print(f"[INFO] jockey_aliases: {jockey_alias_total} 件, trainer_aliases: {trainer_alias_total} 件")
 
 
 def parse_args():
