@@ -19,13 +19,14 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QDate, QProcess, Qt, QUrl
+from PySide6.QtCore import QDate, QProcess, QStringListModel, Qt, QUrl
 from PySide6.QtGui import QBrush, QCloseEvent, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
+    QCompleter,
     QDateEdit,
     QFileDialog,
     QFormLayout,
@@ -266,6 +267,48 @@ class CollapsibleBox(QWidget):
         self._collapsed = collapsed
         self._content.setVisible(not self._collapsed)
         self._update_label()
+
+
+
+# ── タイプアヘッド補完ウィジェット ────────────────────────────────────────────
+
+class _MasterLineEdit(QLineEdit):
+    """QLineEdit with type-ahead QCompleter for master data (horse / jockey / trainer).
+
+    items: list of (display_text, code_or_id) pairs.
+    As the user types, a popup shows matching entries (case-insensitive substring match).
+    selected_code() returns the backing code/ID for the current text, or the raw text
+    when no match is found (free-text fallback).
+    """
+
+    def __init__(
+        self,
+        items: list[tuple[str, str]],
+        placeholder: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._value_map: dict[str, str] = {}
+        display_names: list[str] = []
+        for display, code in items:
+            display_names.append(display)
+            if display not in self._value_map:
+                self._value_map[display] = code
+
+        string_model = QStringListModel(display_names, self)
+        completer = QCompleter(string_model, self)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self.setCompleter(completer)
+
+        if placeholder:
+            self.setPlaceholderText(placeholder)
+
+    def selected_code(self) -> str:
+        """Return the backing code/ID for the current display text, or the raw text."""
+        text = self.text().strip()
+        return self._value_map.get(text, text)
 
 
 # ── メインウィンドウ ──────────────────────────────────────────────────────────
@@ -2112,6 +2155,10 @@ class MainWindow(QMainWindow):
             item = self.manual_table.item(row, col)
             text = item.text().strip() if item else ""
             return text, text
+        if isinstance(widget, _MasterLineEdit):
+            display = widget.text().strip()
+            value = widget.selected_code()
+            return display, value
         if isinstance(widget, QComboBox):
             display = widget.currentText().strip()
             data = widget.currentData()
@@ -2232,7 +2279,13 @@ class MainWindow(QMainWindow):
                 rows = conn.execute(
                     "SELECT horse_id, horse_name FROM horses ORDER BY horse_name"
                 ).fetchall()
-                self._manual_horse_data = [(r[1], r[0]) for r in rows]
+                name_counts: dict[str, int] = {}
+                for r in rows:
+                    name_counts[r[1]] = name_counts.get(r[1], 0) + 1
+                self._manual_horse_data = [
+                    (f"{r[1]} ({r[0]})" if name_counts[r[1]] > 1 else r[1], r[0])
+                    for r in rows
+                ]
                 self._manual_horses_available = True
                 self._log(f"[手動予測] 馬マスタ: {len(rows)} 件読み込み")
             except Exception:
@@ -2312,13 +2365,9 @@ class MainWindow(QMainWindow):
     def _update_manual_row_widgets(self, row: int) -> None:
         """指定行のウィジェットを現在のマスタデータに合わせて更新する。"""
         if self._manual_horses_available and self._manual_horse_data:
-            combo = QComboBox()
-            combo.setEditable(True)
-            combo.addItem("", "")
-            for name, horse_id in self._manual_horse_data:
-                combo.addItem(name, horse_id)
-            combo.activated.connect(lambda _idx, r=row: self._on_manual_horse_changed(r))
-            self.manual_table.setCellWidget(row, _MANUAL_COL_HORSE, combo)
+            edit = _MasterLineEdit(self._manual_horse_data, "馬名 / horse_id")
+            edit.editingFinished.connect(lambda r=row: self._on_manual_horse_changed(r))
+            self.manual_table.setCellWidget(row, _MANUAL_COL_HORSE, edit)
         else:
             edit = QLineEdit()
             edit.setPlaceholderText("horse_id")
@@ -2326,24 +2375,18 @@ class MainWindow(QMainWindow):
             self.manual_table.setCellWidget(row, _MANUAL_COL_HORSE, edit)
 
         if self._manual_jockeys_available and self._manual_jockey_data:
-            combo = QComboBox()
-            combo.setEditable(True)
-            combo.addItem("", "")
-            for name, code in self._manual_jockey_data:
-                combo.addItem(name, code)
-            self.manual_table.setCellWidget(row, _MANUAL_COL_JOCKEY, combo)
+            self.manual_table.setCellWidget(
+                row, _MANUAL_COL_JOCKEY, _MasterLineEdit(self._manual_jockey_data, "騎手コード")
+            )
         else:
             edit = QLineEdit()
             edit.setPlaceholderText("騎手コード")
             self.manual_table.setCellWidget(row, _MANUAL_COL_JOCKEY, edit)
 
         if self._manual_trainers_available and self._manual_trainer_data:
-            combo = QComboBox()
-            combo.setEditable(True)
-            combo.addItem("", "")
-            for name, code in self._manual_trainer_data:
-                combo.addItem(name, code)
-            self.manual_table.setCellWidget(row, _MANUAL_COL_TRAINER, combo)
+            self.manual_table.setCellWidget(
+                row, _MANUAL_COL_TRAINER, _MasterLineEdit(self._manual_trainer_data, "調教師コード")
+            )
         else:
             edit = QLineEdit()
             edit.setPlaceholderText("調教師コード")
