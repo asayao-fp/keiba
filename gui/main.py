@@ -94,6 +94,10 @@ _TP_HIGHLIGHT_COLOR = QColor("#c8f5c8")
 # フォールバック順位値 (rank が未設定の場合に使用)
 _RANK_FALLBACK = 9999
 
+# 組み合わせ予測結果テーブルの列ヘッダー
+_WIDE_TABLE_COLS = ["順位", "race_key", "馬番A", "馬番B", "p_wide"]
+_SANRENPUKU_TABLE_COLS = ["順位", "race_key", "馬番A", "馬番B", "馬番C", "p_sanrenpuku"]
+
 # 手動予測セクションの定数
 _TRACK_CONDITION_MAP = {"良": "1", "稍重": "2", "重": "3", "不良": "4"}
 _MANUAL_ENTRY_COLS = ["馬番", "馬名", "騎手", "調教師", "斤量(kg)", "馬体重(kg)"]
@@ -566,6 +570,60 @@ class MainWindow(QMainWindow):
         self._retrain_box.setContentLayout(retrain_layout)
         root_layout.addWidget(self._retrain_box)
 
+        # ── 組み合わせ予測 ────────────────────────────
+        self._combo_box = CollapsibleBox("組み合わせ予測")
+        combo_layout = QVBoxLayout()
+
+        combo_form = QFormLayout()
+
+        self.wide_model_edit = QLineEdit()
+        self.wide_model_edit.setPlaceholderText("models/wide_model.cbm")
+        combo_form.addRow("ワイドモデルパス:", self._with_browse(self.wide_model_edit, file=True))
+
+        self.sanrenpuku_model_edit = QLineEdit()
+        self.sanrenpuku_model_edit.setPlaceholderText("models/sanrenpuku_model.cbm")
+        combo_form.addRow("3連複モデルパス:", self._with_browse(self.sanrenpuku_model_edit, file=True))
+
+        self.combo_topn_spin = QSpinBox()
+        self.combo_topn_spin.setRange(1, 200)
+        self.combo_topn_spin.setValue(10)
+        combo_form.addRow("上位 N 件:", self.combo_topn_spin)
+
+        combo_layout.addLayout(combo_form)
+
+        combo_btn_layout = QHBoxLayout()
+
+        self.predict_wide_btn = QPushButton("ワイド予測")
+        self.predict_wide_btn.setMinimumHeight(36)
+        self.predict_wide_btn.clicked.connect(self._on_predict_wide)
+        combo_btn_layout.addWidget(self.predict_wide_btn)
+
+        self.predict_sanrenpuku_btn = QPushButton("3連複予測")
+        self.predict_sanrenpuku_btn.setMinimumHeight(36)
+        self.predict_sanrenpuku_btn.clicked.connect(self._on_predict_sanrenpuku)
+        combo_btn_layout.addWidget(self.predict_sanrenpuku_btn)
+
+        combo_layout.addLayout(combo_btn_layout)
+
+        combo_layout.addWidget(QLabel("ワイド予測結果:"))
+        self.wide_table = QTableWidget(0, len(_WIDE_TABLE_COLS))
+        self.wide_table.setHorizontalHeaderLabels(_WIDE_TABLE_COLS)
+        self.wide_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.wide_table.verticalHeader().setVisible(False)
+        self.wide_table.setMinimumHeight(80)
+        combo_layout.addWidget(self.wide_table)
+
+        combo_layout.addWidget(QLabel("3連複予測結果:"))
+        self.sanrenpuku_table = QTableWidget(0, len(_SANRENPUKU_TABLE_COLS))
+        self.sanrenpuku_table.setHorizontalHeaderLabels(_SANRENPUKU_TABLE_COLS)
+        self.sanrenpuku_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.sanrenpuku_table.verticalHeader().setVisible(False)
+        self.sanrenpuku_table.setMinimumHeight(80)
+        combo_layout.addWidget(self.sanrenpuku_table)
+
+        self._combo_box.setContentLayout(combo_layout)
+        root_layout.addWidget(self._combo_box)
+
         # ── ログ出力 ──────────────────────────────────
         self._log_box = CollapsibleBox("ログ")
         log_layout = QVBoxLayout()
@@ -754,6 +812,13 @@ class MainWindow(QMainWindow):
         sanrenpuku_retrain_model = cfg.get("sanrenpuku_retrain_model") or str(REPO_ROOT / "models" / "sanrenpuku_model.cbm")
         self.sanrenpuku_retrain_model_edit.setText(sanrenpuku_retrain_model)
 
+        # 組み合わせ予測モデルパス
+        wide_predict_model = cfg.get("wide_predict_model") or str(REPO_ROOT / "models" / "wide_model.cbm")
+        self.wide_model_edit.setText(wide_predict_model)
+        sanrenpuku_predict_model = cfg.get("sanrenpuku_predict_model") or str(REPO_ROOT / "models" / "sanrenpuku_model.cbm")
+        self.sanrenpuku_model_edit.setText(sanrenpuku_predict_model)
+        self.combo_topn_spin.setValue(int(cfg.get("combo_topn", 10)))
+
         # ウィンドウサイズ
         geom = cfg.get("window_geometry")
         if geom:
@@ -769,6 +834,7 @@ class MainWindow(QMainWindow):
         self._settings_box.setCollapsed(collapsed.get("settings", False))
         self._races_box.setCollapsed(collapsed.get("races", False))
         self._retrain_box.setCollapsed(collapsed.get("retrain", True))
+        self._combo_box.setCollapsed(collapsed.get("combo", True))
         self._log_box.setCollapsed(collapsed.get("log", True))
         self._results_box.setCollapsed(collapsed.get("results", True))
         self._manual_box.setCollapsed(collapsed.get("manual", True))
@@ -791,6 +857,9 @@ class MainWindow(QMainWindow):
             "wide_retrain_model": self.wide_retrain_model_edit.text().strip(),
             "sanrenpuku_train_csv": self.sanrenpuku_train_csv_edit.text().strip(),
             "sanrenpuku_retrain_model": self.sanrenpuku_retrain_model_edit.text().strip(),
+            "wide_predict_model": self.wide_model_edit.text().strip(),
+            "sanrenpuku_predict_model": self.sanrenpuku_model_edit.text().strip(),
+            "combo_topn": self.combo_topn_spin.value(),
             "window_geometry": {
                 "x": geom.x(),
                 "y": geom.y(),
@@ -801,6 +870,7 @@ class MainWindow(QMainWindow):
                 "settings": self._settings_box.isCollapsed(),
                 "races": self._races_box.isCollapsed(),
                 "retrain": self._retrain_box.isCollapsed(),
+                "combo": self._combo_box.isCollapsed(),
                 "log": self._log_box.isCollapsed(),
                 "results": self._results_box.isCollapsed(),
                 "manual": self._manual_box.isCollapsed(),
@@ -1358,6 +1428,8 @@ class MainWindow(QMainWindow):
         self.retrain_wide_btn.setEnabled(not running and _WIDE_RETRAIN_AVAILABLE)
         self.retrain_sanrenpuku_btn.setEnabled(not running and _SANRENPUKU_RETRAIN_AVAILABLE)
         self.retrain_all_btn.setEnabled(not running and _PLACE_RETRAIN_AVAILABLE)
+        self.predict_wide_btn.setEnabled(not running)
+        self.predict_sanrenpuku_btn.setEnabled(not running)
         self.cancel_btn.setEnabled(running)
 
     # ── Update (RACE) ─────────────────────────────────
@@ -1745,6 +1817,220 @@ class MainWindow(QMainWindow):
             self._log("[再学習] 全モデル再学習 完了")
         else:
             self._log("[再学習] キャンセルされました" if self._cancelled else "[再学習] エラーで終了しました")
+
+    # ── 組み合わせ予測 ─────────────────────────────────
+
+    def _get_combo_race_keys(self) -> list[str] | None:
+        """テーブルで選択されたか手動入力されたレースキーを返す。なければ警告を出して None を返す。"""
+        race_keys = self._get_selected_race_keys()
+        if not race_keys:
+            race_keys_raw = self.racekeys_edit.text().strip()
+            if not race_keys_raw:
+                QMessageBox.warning(
+                    self, "入力エラー", "レースキーをテーブルで選択するか手動入力してください。"
+                )
+                return None
+            race_keys = race_keys_raw.split()
+        return race_keys
+
+    def _build_wide_predict_commands(self) -> list[list[str]] | None:
+        db = self.db_edit.text().strip()
+        if not self._require(db, "DB パス"):
+            return None
+        model = self.wide_model_edit.text().strip() or str(REPO_ROOT / "models" / "wide_model.cbm")
+        topn = self.combo_topn_spin.value()
+        race_keys = self._get_combo_race_keys()
+        if race_keys is None:
+            return None
+        return [
+            [
+                sys.executable,
+                _script("predict_wide.py"),
+                "--db", db,
+                "--race-key", rk,
+                "--model", model,
+                "--topn", str(topn),
+                "--format", "jsonl",
+            ]
+            for rk in race_keys
+        ]
+
+    def _build_sanrenpuku_predict_commands(self) -> list[list[str]] | None:
+        db = self.db_edit.text().strip()
+        if not self._require(db, "DB パス"):
+            return None
+        model = self.sanrenpuku_model_edit.text().strip() or str(REPO_ROOT / "models" / "sanrenpuku_model.cbm")
+        topn = self.combo_topn_spin.value()
+        race_keys = self._get_combo_race_keys()
+        if race_keys is None:
+            return None
+        return [
+            [
+                sys.executable,
+                _script("predict_sanrenpuku.py"),
+                "--db", db,
+                "--race-key", rk,
+                "--model", model,
+                "--topn", str(topn),
+                "--format", "jsonl",
+            ]
+            for rk in race_keys
+        ]
+
+    def _on_predict_wide(self) -> None:
+        cmds = self._build_wide_predict_commands()
+        if cmds is None:
+            return
+        self._log("=" * 60)
+        self._log("[ワイド予測] predict_wide.py を実行します")
+        self.wide_table.setRowCount(0)
+        self._set_running(True)
+        self._cancelled = False
+        self._run_combo_sequential(cmds, on_finish=self._on_wide_predict_done)
+
+    def _on_wide_predict_done(self, success: bool, results: list[dict]) -> None:
+        self._set_running(False)
+        if success:
+            self._log(f"[ワイド予測] 完了: {len(results)} 件")
+            self._display_wide_results(results)
+            self._combo_box.setCollapsed(False)
+        else:
+            self._log(
+                "[ワイド予測] キャンセルされました"
+                if self._cancelled
+                else "[ワイド予測] エラーで終了しました"
+            )
+
+    def _display_wide_results(self, results: list[dict]) -> None:
+        self.wide_table.setRowCount(0)
+        for rank, row in enumerate(results, start=1):
+            r = self.wide_table.rowCount()
+            self.wide_table.insertRow(r)
+            self.wide_table.setItem(r, 0, QTableWidgetItem(str(rank)))
+            self.wide_table.setItem(r, 1, QTableWidgetItem(str(row.get("race_key", ""))))
+            self.wide_table.setItem(r, 2, QTableWidgetItem(str(row.get("horse_no_a", ""))))
+            self.wide_table.setItem(r, 3, QTableWidgetItem(str(row.get("horse_no_b", ""))))
+            self.wide_table.setItem(r, 4, QTableWidgetItem(str(row.get("p_wide", ""))))
+
+    def _on_predict_sanrenpuku(self) -> None:
+        cmds = self._build_sanrenpuku_predict_commands()
+        if cmds is None:
+            return
+        self._log("=" * 60)
+        self._log("[3連複予測] predict_sanrenpuku.py を実行します")
+        self.sanrenpuku_table.setRowCount(0)
+        self._set_running(True)
+        self._cancelled = False
+        self._run_combo_sequential(cmds, on_finish=self._on_sanrenpuku_predict_done)
+
+    def _on_sanrenpuku_predict_done(self, success: bool, results: list[dict]) -> None:
+        self._set_running(False)
+        if success:
+            self._log(f"[3連複予測] 完了: {len(results)} 件")
+            self._display_sanrenpuku_results(results)
+            self._combo_box.setCollapsed(False)
+        else:
+            self._log(
+                "[3連複予測] キャンセルされました"
+                if self._cancelled
+                else "[3連複予測] エラーで終了しました"
+            )
+
+    def _display_sanrenpuku_results(self, results: list[dict]) -> None:
+        self.sanrenpuku_table.setRowCount(0)
+        for rank, row in enumerate(results, start=1):
+            r = self.sanrenpuku_table.rowCount()
+            self.sanrenpuku_table.insertRow(r)
+            self.sanrenpuku_table.setItem(r, 0, QTableWidgetItem(str(rank)))
+            self.sanrenpuku_table.setItem(r, 1, QTableWidgetItem(str(row.get("race_key", ""))))
+            self.sanrenpuku_table.setItem(r, 2, QTableWidgetItem(str(row.get("horse_no_a", ""))))
+            self.sanrenpuku_table.setItem(r, 3, QTableWidgetItem(str(row.get("horse_no_b", ""))))
+            self.sanrenpuku_table.setItem(r, 4, QTableWidgetItem(str(row.get("horse_no_c", ""))))
+            self.sanrenpuku_table.setItem(r, 5, QTableWidgetItem(str(row.get("p_sanrenpuku", ""))))
+
+    def _run_combo_sequential(
+        self,
+        commands: list[list[str]],
+        on_finish: Callable[[bool, list[dict]], None],
+        _index: int = 0,
+        _accumulated: list[dict] | None = None,
+    ) -> None:
+        """commands をインデックス順に逐次実行し、各コマンドの JSONL 出力を収集して
+        全完了後に on_finish(success, rows) を呼ぶ。"""
+        if _accumulated is None:
+            _accumulated = []
+
+        if self._cancelled:
+            return
+
+        if _index >= len(commands):
+            on_finish(True, _accumulated)
+            return
+
+        cmd = commands[_index]
+        step_label = f"Step {_index + 1}/{len(commands)}"
+        self._log(f"[{step_label}] $ {' '.join(cmd)}")
+
+        proc = QProcess(self)
+        self._processes.append(proc)
+        proc.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
+
+        _stdout_chunks: list[bytes] = []
+
+        proc.readyReadStandardOutput.connect(
+            lambda: _stdout_chunks.append(proc.readAllStandardOutput().data())
+        )
+
+        def _read_stderr() -> None:
+            data = proc.readAllStandardError().data()
+            try:
+                text = data.decode("cp932")
+            except UnicodeDecodeError:
+                text = data.decode("utf-8", errors="replace")
+            for line in text.splitlines():
+                self._log(line)
+
+        proc.readyReadStandardError.connect(_read_stderr)
+
+        def _finished(
+            exit_code: int,
+            exit_status: QProcess.ExitStatus,
+            p: QProcess = proc,
+        ) -> None:
+            if p in self._processes:
+                self._processes.remove(p)
+            if self._cancelled:
+                return
+
+            raw = b"".join(_stdout_chunks)
+            try:
+                text = raw.decode("utf-8", errors="replace")
+            except UnicodeDecodeError:
+                text = ""
+
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    _accumulated.append(json.loads(line))
+                except json.JSONDecodeError:
+                    self._log(f"  [JSON解析失敗] {line}")
+
+            if (
+                exit_status == QProcess.ExitStatus.NormalExit
+                and exit_code == 0
+            ):
+                self._log(f"[{step_label}] 終了 (exit code 0)")
+                self._run_combo_sequential(commands, on_finish, _index + 1, _accumulated)
+            else:
+                self._log(
+                    f"[{step_label}] 失敗 (exit code {exit_code}, status {exit_status})"
+                )
+                on_finish(False, _accumulated)
+
+        proc.finished.connect(_finished)
+        proc.start(cmd[0], cmd[1:])
 
     # ── キャンセル ────────────────────────────────────
 
