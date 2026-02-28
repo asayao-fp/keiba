@@ -54,10 +54,11 @@ def _sb(b: bytes, pos: int, length: int) -> str:
 def parse_ra(payload: str):
     """
     RA レコード (レース詳細, 1272 byte) をパースして dict を返す。
-    レコード種別識別子が 'RA' でない場合は None を返す。
+    レコード種別識別子が 'RA' でない場合、または RA7 など RA 以外の
+    サブタイプの場合は None を返す。
     """
     b = payload.encode("cp932")
-    if len(b) < 707 or payload[:2] != "RA":
+    if len(b) < 707 or payload[:2] != "RA" or payload[:3] == "RA7":
         return None
 
     yyyy        = _sb(b, 12, 4)
@@ -275,10 +276,20 @@ def build_tables(db_path: str, graded_only: bool) -> None:
 
     now = datetime.datetime.now().isoformat()
 
+    ra7_skipped = conn.execute(
+        "SELECT COUNT(*) FROM raw_jv_records"
+        " WHERE dataspec = 'RACE'"
+        " AND SUBSTR(payload_text, 1, 3) = 'RA7'"
+    ).fetchone()[0]
+    if ra7_skipped:
+        print(f"[INFO] RA7 レコードをスキップ: {ra7_skipped} 件")
+
     cursor = conn.execute(
         "SELECT payload_text FROM raw_jv_records"
         " WHERE dataspec = 'RACE'"
-        " AND SUBSTR(payload_text, 1, 2) IN ('RA', 'SE')"
+        " AND (SUBSTR(payload_text, 1, 2) = 'SE'"
+        "      OR (SUBSTR(payload_text, 1, 2) = 'RA'"
+        "          AND SUBSTR(payload_text, 1, 3) != 'RA7'))"
     )
 
     ra_count = 0
