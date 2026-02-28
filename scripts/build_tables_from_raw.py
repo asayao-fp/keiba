@@ -289,20 +289,19 @@ def build_tables(db_path: str, graded_only: bool) -> None:
 
     now = datetime.datetime.now().isoformat()
 
-    ra7_skipped = conn.execute(
+    ra7_total = conn.execute(
         "SELECT COUNT(*) FROM raw_jv_records"
         " WHERE dataspec = 'RACE'"
         " AND SUBSTR(payload_text, 1, 3) = 'RA7'"
     ).fetchone()[0]
-    if ra7_skipped:
-        print(f"[INFO] RA7 レコードをスキップ: {ra7_skipped} 件")
+    if ra7_total:
+        print(f"[INFO] RA7 レコード: {ra7_total} 件 (距離補完に使用)")
 
     cursor = conn.execute(
         "SELECT payload_text FROM raw_jv_records"
         " WHERE dataspec = 'RACE'"
         " AND (SUBSTR(payload_text, 1, 2) = 'SE'"
-        "      OR (SUBSTR(payload_text, 1, 2) = 'RA'"
-        "          AND SUBSTR(payload_text, 1, 3) != 'RA7'))"
+        "      OR SUBSTR(payload_text, 1, 2) = 'RA')"
     )
 
     ra_count = 0
@@ -312,6 +311,8 @@ def build_tables(db_path: str, graded_only: bool) -> None:
     ra2_missing_dist = 0
     ra9_count = 0
     ra9_missing_dist = 0
+    ra7_seen = 0
+    ra7_dist_map: dict[str, int] = {}
     se_count = 0
     processed = 0
 
@@ -320,6 +321,26 @@ def build_tables(db_path: str, graded_only: bool) -> None:
             continue
         record_spec = payload[:3]
         record_type = payload[:2]
+
+        if record_spec == "RA7":
+            ra7_seen += 1
+            b7 = payload.encode("cp932")
+            if len(b7) >= 701:
+                yyyy7   = _sb(b7, 12, 4)
+                mmdd7   = _sb(b7, 16, 4)
+                course7 = _sb(b7, 20, 2)
+                kai7    = _sb(b7, 22, 2)
+                day7    = _sb(b7, 24, 2)
+                raceno7 = _sb(b7, 26, 2)
+                race_key7 = f"{yyyy7}{mmdd7}{course7}{kai7}{day7}{raceno7}"
+                dist_raw7 = _sb(b7, 698, 4).strip()
+                try:
+                    dm7 = int(dist_raw7)
+                    if 800 <= dm7 <= 4000:
+                        ra7_dist_map[race_key7] = dm7
+                except ValueError:
+                    pass
+            continue
 
         if record_type == "RA":
             rec = parse_ra(payload)
@@ -484,6 +505,23 @@ def build_tables(db_path: str, graded_only: bool) -> None:
 
     conn.commit()
 
+    # RA7 距離補完パス: RA7 から得た距離で distance_m が NULL のレースを補完する
+    if ra7_dist_map:
+        print(f"[INFO] RA7 距離候補: {len(ra7_dist_map)} レース")
+        null_before = conn.execute(
+            "SELECT COUNT(*) FROM races WHERE distance_m IS NULL"
+        ).fetchone()[0]
+        conn.executemany(
+            "UPDATE races SET distance_m = ? WHERE race_key = ? AND distance_m IS NULL",
+            [(dm, rk) for rk, dm in ra7_dist_map.items()],
+        )
+        conn.commit()
+        null_after = conn.execute(
+            "SELECT COUNT(*) FROM races WHERE distance_m IS NULL"
+        ).fetchone()[0]
+        ra7_updated = null_before - null_after
+        print(f"[INFO] RA7 距離補完: {ra7_updated} 件更新, 残 NULL: {null_after} 件")
+
     if graded_only:
         print("[INFO] --graded-only: 重賞レース (grade_code が空白以外) のみを残します")
         conn.execute(
@@ -508,6 +546,7 @@ def build_tables(db_path: str, graded_only: bool) -> None:
     print(f"[INFO] RA1 パース: {ra1_count} 件 (距離 NULL: {ra1_missing_dist} 件)")
     print(f"[INFO] RA2 パース: {ra2_count} 件 (距離 NULL: {ra2_missing_dist} 件)")
     print(f"[INFO] RA9 パース: {ra9_count} 件 (距離 NULL: {ra9_missing_dist} 件)")
+    print(f"[INFO] RA7 参照: {ra7_seen} 件 (距離候補: {len(ra7_dist_map)} レース)")
     print(f"[INFO] SE パース: {se_count} 件 → entries テーブル: {entry_total} 件, horses テーブル: {horse_total} 件")
     print(f"[INFO] jockey_aliases: {jockey_alias_total} 件, trainer_aliases: {trainer_alias_total} 件")
     print(f"[INFO] horse_latest_metrics: {metrics_total} 件")
