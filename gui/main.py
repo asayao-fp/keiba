@@ -115,6 +115,9 @@ _DISTANCE_PRESETS = [1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400, 2500, 3000,
 # 馬場種別オプション
 _SURFACE_OPTIONS = ["", "芝", "ダート", "サンド", "障害", "不明"]
 
+# 馬番ドロップダウンの最大値
+_HORSE_NO_MAX = 20
+
 # モデルが持つ可能性のある馬場種別特徴量列名
 _KNOWN_SURFACE_COL_NAMES = {"surface", "surface_code", "track_surface"}
 
@@ -2364,6 +2367,14 @@ class MainWindow(QMainWindow):
 
     def _update_manual_row_widgets(self, row: int) -> None:
         """指定行のウィジェットを現在のマスタデータに合わせて更新する。"""
+        # 馬番: ドロップダウン (空 + 1..20)
+        existing_widget = self.manual_table.cellWidget(row, _MANUAL_COL_HORSE_NO)
+        if not isinstance(existing_widget, QComboBox):
+            horse_no_combo = QComboBox()
+            horse_no_combo.addItem("")
+            horse_no_combo.addItems([str(n) for n in range(1, _HORSE_NO_MAX + 1)])
+            self.manual_table.setCellWidget(row, _MANUAL_COL_HORSE_NO, horse_no_combo)
+
         if self._manual_horses_available and self._manual_horse_data:
             edit = _MasterLineEdit(self._manual_horse_data, "馬名 / horse_id")
             edit.editingFinished.connect(lambda r=row: self._on_manual_horse_changed(r))
@@ -2439,8 +2450,12 @@ class MainWindow(QMainWindow):
         for i in range(1, n + 1):
             r = self.manual_table.rowCount()
             self.manual_table.insertRow(r)
-            self.manual_table.setItem(r, _MANUAL_COL_HORSE_NO, QTableWidgetItem(str(i)))
             self._update_manual_row_widgets(r)
+            horse_no_combo = self.manual_table.cellWidget(r, _MANUAL_COL_HORSE_NO)
+            if isinstance(horse_no_combo, QComboBox):
+                idx = horse_no_combo.findText(str(i))
+                if idx >= 0:
+                    horse_no_combo.setCurrentIndex(idx)
 
     def _on_distance_preset_changed(self, index: int) -> None:
         """距離プリセットが選択されたときスピンボックスの値を更新する。"""
@@ -2491,10 +2506,14 @@ class MainWindow(QMainWindow):
         for row in range(self.manual_table.rowCount()):
             row_label = f"行 {row + 1}"
 
-            horse_no_item = self.manual_table.item(row, _MANUAL_COL_HORSE_NO)
-            horse_no_text = horse_no_item.text().strip() if horse_no_item else ""
+            horse_no_widget = self.manual_table.cellWidget(row, _MANUAL_COL_HORSE_NO)
+            if isinstance(horse_no_widget, QComboBox):
+                horse_no_text = horse_no_widget.currentText().strip()
+            else:
+                horse_no_item = self.manual_table.item(row, _MANUAL_COL_HORSE_NO)
+                horse_no_text = horse_no_item.text().strip() if horse_no_item else ""
             if not horse_no_text or not horse_no_text.isdigit():
-                errors.append(f"{row_label}: 馬番を整数で入力してください。")
+                errors.append(f"{row_label}: 馬番をドロップダウンから選択してください。")
                 continue
 
             horse_display, horse_id = self._get_manual_cell(row, _MANUAL_COL_HORSE)
