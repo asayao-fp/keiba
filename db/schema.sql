@@ -42,3 +42,9 @@ CREATE TABLE IF NOT EXISTS place_odds (
     updated_at      TEXT    NOT NULL,
     PRIMARY KEY (race_key, horse_no)
 );
+
+CREATE TABLE IF NOT EXISTS horses (
+    horse_id    TEXT    PRIMARY KEY,
+    horse_name  TEXT    NOT NULL,
+    updated_at  TEXT    NOT NULL
+);

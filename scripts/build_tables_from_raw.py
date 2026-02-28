@@ -86,8 +86,9 @@ def parse_se(payload: str):
     kai    = _sb(b, 22, 2)
     day    = _sb(b, 24, 2)
     raceno = _sb(b, 26, 2)
-    horse_no  = _sb(b, 29, 2)
-    horse_id  = _sb(b, 31, 10)
+    horse_no   = _sb(b, 29, 2)
+    horse_id   = _sb(b, 31, 10)
+    horse_name = _sb(b, 41, 36).strip(" \u3000")
     trainer_code         = _sb(b, 86, 5)
     handicap_weight_raw  = _sb(b, 289, 3).strip()
     jockey_code          = _sb(b, 297, 5)
@@ -131,6 +132,7 @@ def parse_se(payload: str):
         "race_key":            race_key,
         "horse_no":            horse_no,
         "horse_id":            horse_id,
+        "horse_name":          horse_name,
         "jockey_code":         jockey_code,
         "trainer_code":        trainer_code,
         "body_weight":         body_weight,
@@ -175,6 +177,12 @@ def init_normalized_tables(conn: sqlite3.Connection) -> None:
             trainer_code TEXT PRIMARY KEY,
             trainer_name TEXT,
             updated_at   TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS horses (
+            horse_id    TEXT    PRIMARY KEY,
+            horse_name  TEXT    NOT NULL,
+            updated_at  TEXT    NOT NULL
         );
         """
     )
@@ -299,6 +307,17 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                     rec["handicap_weight_x10"],
                 ),
             )
+            if rec["horse_id"] and rec["horse_name"]:
+                conn.execute(
+                    """
+                    INSERT INTO horses (horse_id, horse_name, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(horse_id) DO UPDATE SET
+                        horse_name = excluded.horse_name,
+                        updated_at = excluded.updated_at
+                    """,
+                    (rec["horse_id"], rec["horse_name"], now),
+                )
             se_count += 1
             processed += 1
             if processed % 50_000 == 0:
@@ -319,11 +338,12 @@ def build_tables(db_path: str, graded_only: bool) -> None:
 
     race_total   = conn.execute("SELECT COUNT(*) FROM races").fetchone()[0]
     entry_total  = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+    horse_total  = conn.execute("SELECT COUNT(*) FROM horses").fetchone()[0]
 
     conn.close()
 
     print(f"[INFO] RA パース: {ra_count} 件 → races テーブル: {race_total} 件")
-    print(f"[INFO] SE パース: {se_count} 件 → entries テーブル: {entry_total} 件")
+    print(f"[INFO] SE パース: {se_count} 件 → entries テーブル: {entry_total} 件, horses テーブル: {horse_total} 件")
 
 
 def parse_args():

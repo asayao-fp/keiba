@@ -64,7 +64,7 @@ _RACE_TABLE_COLS = ["✓", "レース名", "競馬場", "R", "距離", "馬場",
 # 予想結果テーブルの列ヘッダー
 _SUMMARY_TABLE_COLS = ["レース名", "競馬場", "R", "S", "買い目数", "賭金計", "期待値計", "avg p", "F/B", "race_key"]
 _BETS_TABLE_COLS = ["馬番", "賭金", "p_place", "オッズ使用", "期待値(円)", "EV/1unit"]
-_PRED_TABLE_COLS = ["順位", "馬番", "馬ID", "騎手名", "調教師名", "p_place", "着順", "複勝圏", "TP"]
+_PRED_TABLE_COLS = ["順位", "馬番", "馬名", "騎手名", "調教師名", "p_place", "着順", "複勝圏", "TP"]
 
 # 真陽性ハイライト色 (予測上位かつ複勝圏的中)
 _TP_HIGHLIGHT_COLOR = QColor("#c8f5c8")
@@ -913,7 +913,7 @@ class MainWindow(QMainWindow):
 
             # entries を horse_no キーでフェッチ
             entry_rows = conn.execute(
-                "SELECT horse_no, finish_pos, is_place, jockey_code, trainer_code"
+                "SELECT horse_no, finish_pos, is_place, jockey_code, trainer_code, horse_id"
                 " FROM entries WHERE race_key = ?",
                 (race_key,),
             ).fetchall()
@@ -921,6 +921,7 @@ class MainWindow(QMainWindow):
                 r[0]: {
                     "finish_pos": r[1], "is_place": r[2],
                     "jockey_code": r[3], "trainer_code": r[4],
+                    "horse_id": r[5],
                 }
                 for r in entry_rows
             }
@@ -945,6 +946,16 @@ class MainWindow(QMainWindow):
             except Exception:
                 logger.warning("[予測拡充] trainers テーブルが利用できません")
 
+            # horses テーブルが存在すれば馬名を取得
+            horse_map: dict[str, str] = {}
+            try:
+                hr_rows = conn.execute(
+                    "SELECT horse_id, horse_name FROM horses"
+                ).fetchall()
+                horse_map = {r[0]: r[1] for r in hr_rows if r[0]}
+            except Exception:
+                logger.warning("[予測拡充] horses テーブルが利用できません")
+
             # place_odds テーブルが存在すれば has_odds セットを取得
             has_odds_set: set[str] = set()
             try:
@@ -962,8 +973,10 @@ class MainWindow(QMainWindow):
                 entry = entry_map.get(hno, {})
                 jockey_code = entry.get("jockey_code") or ""
                 trainer_code = entry.get("trainer_code") or ""
+                horse_id = entry.get("horse_id") or str(pred.get("horse_id", ""))
                 pred["jockey_name"] = jockey_map.get(jockey_code, jockey_code)
                 pred["trainer_name"] = trainer_map.get(trainer_code, trainer_code)
+                pred["horse_name"] = horse_map.get(horse_id) or horse_id
                 pred["finish_pos"] = entry.get("finish_pos")
                 pred["is_place"] = entry.get("is_place")
                 pred["has_odds"] = hno in has_odds_set
@@ -1012,7 +1025,7 @@ class MainWindow(QMainWindow):
 
             self.pred_table.setItem(r, 0, _item(pred.get("rank", "")))
             self.pred_table.setItem(r, 1, _item(pred.get("horse_no", "")))
-            self.pred_table.setItem(r, 2, _item(pred.get("horse_id", "")))
+            self.pred_table.setItem(r, 2, _item(pred.get("horse_name") or pred.get("horse_id", "")))
             self.pred_table.setItem(r, 3, _item(pred.get("jockey_name", "")))
             self.pred_table.setItem(r, 4, _item(pred.get("trainer_name", "")))
             self.pred_table.setItem(r, 5, _item(f"{float(pred.get('p_place', 0)):.4f}" if pred.get("p_place") is not None else ""))
