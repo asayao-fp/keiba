@@ -21,12 +21,35 @@ DEFAULT_TRAIN_CSV = "data/place_train.csv"
 DEFAULT_MODEL_OUT = "models/place_model.cbm"
 
 CATEGORICAL_FEATURES = ["jockey_code", "trainer_code", "course_code", "grade_code", "track_code", "surface"]
-NUMERIC_FEATURES = ["body_weight", "handicap_weight_x10", "distance_m"]
+NUMERIC_FEATURES = [
+    "body_weight",
+    "handicap_weight_x10",
+    "distance_m",
+    "avg_pos_1c_last3",
+    "avg_pos_4c_last3",
+    "avg_gain_last3",
+    "front_rate_last3",
+    "avg_pos_1c_pct_last3",
+    "avg_pos_4c_pct_last3",
+    "n_past",
+]
 FEATURE_COLS = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 TARGET_COL = "is_place"
 
 # 識別用列 (特徴量に含めない)
 ID_COLS = ["race_key", "entry_key", "horse_id", "horse_no", "yyyymmdd"]
+
+# 通過順特徴量は NULL を許容するため dropna 対象から除外
+PASSING_FEATURE_COLS = [
+    "avg_pos_1c_last3",
+    "avg_pos_4c_last3",
+    "avg_gain_last3",
+    "front_rate_last3",
+    "avg_pos_1c_pct_last3",
+    "avg_pos_4c_pct_last3",
+    "n_past",
+]
+REQUIRED_FEATURE_COLS = [c for c in FEATURE_COLS if c not in PASSING_FEATURE_COLS]
 
 
 def parse_args():
@@ -65,8 +88,8 @@ def main():
     # is_place を整数に変換
     df[TARGET_COL] = pd.to_numeric(df[TARGET_COL], errors="coerce")
 
-    # 欠損を除外
-    required = FEATURE_COLS + [TARGET_COL]
+    # 欠損を除外 (通過順特徴量は任意のため除外対象に含めない)
+    required = REQUIRED_FEATURE_COLS + [TARGET_COL]
     before = len(df)
     df = df.dropna(subset=required)
     after = len(df)

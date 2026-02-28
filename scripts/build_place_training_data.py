@@ -33,7 +33,24 @@ COLUMNS = [
     "distance_m",
     "track_code",
     "surface",
+    "avg_pos_1c_last3",
+    "avg_pos_4c_last3",
+    "avg_gain_last3",
+    "front_rate_last3",
+    "avg_pos_1c_pct_last3",
+    "avg_pos_4c_pct_last3",
+    "n_past",
     "is_place",
+]
+
+PASSING_FEATURE_COLS = [
+    "avg_pos_1c_last3",
+    "avg_pos_4c_last3",
+    "avg_gain_last3",
+    "front_rate_last3",
+    "avg_pos_1c_pct_last3",
+    "avg_pos_4c_pct_last3",
+    "n_past",
 ]
 
 
@@ -47,7 +64,7 @@ def fetch_training_rows(conn: sqlite3.Connection, date_from: str | None, date_to
         date_filter += " AND r.yyyymmdd <= ?"
         params.append(date_to)
 
-    query = f"""
+    query_with_passing = f"""
         SELECT
             e.race_key,
             e.entry_key,
@@ -63,6 +80,47 @@ def fetch_training_rows(conn: sqlite3.Connection, date_from: str | None, date_to
             r.distance_m,
             r.track_code,
             r.surface,
+            p.avg_pos_1c_last3,
+            p.avg_pos_4c_last3,
+            p.avg_gain_last3,
+            p.front_rate_last3,
+            p.avg_pos_1c_pct_last3,
+            p.avg_pos_4c_pct_last3,
+            p.n_past,
+            e.is_place
+        FROM entries e
+        JOIN races r ON r.race_key = e.race_key
+        LEFT JOIN horse_past_passing_features p ON p.race_key = e.race_key AND p.horse_id = e.horse_id
+        WHERE e.is_place IS NOT NULL
+          AND e.body_weight IS NOT NULL
+          AND e.handicap_weight_x10 IS NOT NULL
+          {date_filter}
+        ORDER BY r.yyyymmdd, e.race_key, CAST(e.horse_no AS INTEGER)
+    """
+
+    query_without_passing = f"""
+        SELECT
+            e.race_key,
+            e.entry_key,
+            e.horse_id,
+            e.horse_no,
+            r.yyyymmdd,
+            r.course_code,
+            r.grade_code,
+            e.jockey_code,
+            e.trainer_code,
+            e.body_weight,
+            e.handicap_weight_x10,
+            r.distance_m,
+            r.track_code,
+            r.surface,
+            NULL AS avg_pos_1c_last3,
+            NULL AS avg_pos_4c_last3,
+            NULL AS avg_gain_last3,
+            NULL AS front_rate_last3,
+            NULL AS avg_pos_1c_pct_last3,
+            NULL AS avg_pos_4c_pct_last3,
+            NULL AS n_past,
             e.is_place
         FROM entries e
         JOIN races r ON r.race_key = e.race_key
@@ -72,7 +130,15 @@ def fetch_training_rows(conn: sqlite3.Connection, date_from: str | None, date_to
           {date_filter}
         ORDER BY r.yyyymmdd, e.race_key, CAST(e.horse_no AS INTEGER)
     """
-    cur = conn.execute(query, params)
+
+    try:
+        cur = conn.execute(query_with_passing, params)
+    except sqlite3.OperationalError as e:
+        print(
+            f"[WARN] horse_past_passing_features テーブルが利用できません ({e})。通過順特徴量なしで続行します。",
+            file=sys.stderr,
+        )
+        cur = conn.execute(query_without_passing, params)
     return cur.fetchall()
 
 
