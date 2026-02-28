@@ -95,7 +95,7 @@ _MANUAL_COL_BODY_WEIGHT = 5
 _DISTANCE_PRESETS = [1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400, 2500, 3000, 3200, 3400, 3600]
 
 # 馬場種別オプション
-_SURFACE_OPTIONS = ["", "芝", "ダート"]
+_SURFACE_OPTIONS = ["", "芝", "ダート", "サンド", "障害", "不明"]
 
 # モデルが持つ可能性のある馬場種別特徴量列名
 _KNOWN_SURFACE_COL_NAMES = {"surface", "surface_code", "track_surface"}

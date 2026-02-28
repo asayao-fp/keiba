@@ -16,6 +16,35 @@ import sqlite3
 
 DEFAULT_DB_PATH = "jv_data.db"
 
+# トラックコード (コード表2009) → 馬場種別マッピング
+# JRA コード: 10-19 = 芝, 20-28 = ダート, 29 = 障害
+# 地方コード: 51-53 = ダート, 54-56 = サンド, 57-59 = 芝, 60 = 障害, 61-64 = サンド
+_TRACK_CODE_SURFACE: dict[int, str] = {}
+for _c in range(10, 20):
+    _TRACK_CODE_SURFACE[_c] = "芝"
+for _c in range(20, 29):
+    _TRACK_CODE_SURFACE[_c] = "ダート"
+_TRACK_CODE_SURFACE[29] = "障害"
+for _c in [51, 52, 53]:
+    _TRACK_CODE_SURFACE[_c] = "ダート"
+for _c in [54, 55, 56]:
+    _TRACK_CODE_SURFACE[_c] = "サンド"
+for _c in [57, 58, 59]:
+    _TRACK_CODE_SURFACE[_c] = "芝"
+_TRACK_CODE_SURFACE[60] = "障害"
+for _c in [61, 62, 63, 64]:
+    _TRACK_CODE_SURFACE[_c] = "サンド"
+
+
+def _track_code_to_surface(track_code: str | None) -> str:
+    """トラックコード (文字列) を馬場種別 (芝/ダート/サンド/障害/不明) に変換する。"""
+    if not track_code:
+        return "不明"
+    try:
+        return _TRACK_CODE_SURFACE.get(int(track_code), "不明")
+    except (ValueError, TypeError):
+        return "不明"
+
 
 def _sb(b: bytes, pos: int, length: int) -> str:
     """cp932 バイト列上で 1始まり pos から length バイトを切り出して文字列へ変換する。"""
@@ -54,6 +83,9 @@ def parse_ra(payload: str):
     # トラックコード (2009)
     track_code = _sb(b, 706, 2).strip() or None
 
+    # 馬場種別
+    surface = _track_code_to_surface(track_code)
+
     race_key = f"{yyyy}{mmdd}{course}{kai}{day}{raceno}"
     yyyymmdd = f"{yyyy}{mmdd}"
 
@@ -68,6 +100,7 @@ def parse_ra(payload: str):
         "race_name_short": race_name_short,
         "distance_m":      distance_m,
         "track_code":      track_code,
+        "surface":         surface,
     }
 
 
@@ -226,6 +259,7 @@ def init_normalized_tables(conn: sqlite3.Connection) -> None:
     for col_def in [
         "distance_m INTEGER",
         "track_code  TEXT",
+        "surface     TEXT",
     ]:
         try:
             conn.execute(f"ALTER TABLE races ADD COLUMN {col_def}")
@@ -264,8 +298,8 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                 """
                 INSERT INTO races
                     (race_key, yyyymmdd, course_code, kai, day, race_no,
-                     grade_code, race_name_short, distance_m, track_code, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     grade_code, race_name_short, distance_m, track_code, surface, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(race_key) DO UPDATE SET
                     yyyymmdd        = excluded.yyyymmdd,
                     course_code     = excluded.course_code,
@@ -276,6 +310,7 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                     race_name_short = excluded.race_name_short,
                     distance_m      = excluded.distance_m,
                     track_code      = excluded.track_code,
+                    surface         = excluded.surface,
                     created_at      = excluded.created_at
                 """,
                 (
@@ -289,6 +324,7 @@ def build_tables(db_path: str, graded_only: bool) -> None:
                     rec["race_name_short"],
                     rec["distance_m"],
                     rec["track_code"],
+                    rec["surface"],
                     now,
                 ),
             )
