@@ -58,6 +58,14 @@ _PLACE_BUILD_SCRIPT = SCRIPTS_DIR / "build_place_training_data.py"
 _PLACE_TRAIN_SCRIPT = SCRIPTS_DIR / "train_place_model.py"
 _PLACE_RETRAIN_AVAILABLE = _PLACE_BUILD_SCRIPT.exists() and _PLACE_TRAIN_SCRIPT.exists()
 
+_WIDE_BUILD_SCRIPT = SCRIPTS_DIR / "build_wide_training_data.py"
+_WIDE_TRAIN_SCRIPT = SCRIPTS_DIR / "train_wide_model.py"
+_WIDE_RETRAIN_AVAILABLE = _WIDE_BUILD_SCRIPT.exists() and _WIDE_TRAIN_SCRIPT.exists()
+
+_SANRENPUKU_BUILD_SCRIPT = SCRIPTS_DIR / "build_sanrenpuku_training_data.py"
+_SANRENPUKU_TRAIN_SCRIPT = SCRIPTS_DIR / "train_sanrenpuku_model.py"
+_SANRENPUKU_RETRAIN_AVAILABLE = _SANRENPUKU_BUILD_SCRIPT.exists() and _SANRENPUKU_TRAIN_SCRIPT.exists()
+
 # scripts/ を sys.path に追加して fetch_races をインポート
 sys.path.insert(0, str(SCRIPTS_DIR))
 from list_races import fetch_races  # noqa: E402
@@ -500,6 +508,22 @@ class MainWindow(QMainWindow):
         self.place_retrain_model_edit.setPlaceholderText("models/place_model.cbm")
         retrain_form.addRow("複勝モデル出力:", self._with_browse(self.place_retrain_model_edit, file=True))
 
+        self.wide_train_csv_edit = QLineEdit()
+        self.wide_train_csv_edit.setPlaceholderText("data/wide_train.csv")
+        retrain_form.addRow("ワイド学習CSV出力:", self._with_browse(self.wide_train_csv_edit, file=True))
+
+        self.wide_retrain_model_edit = QLineEdit()
+        self.wide_retrain_model_edit.setPlaceholderText("models/wide_model.cbm")
+        retrain_form.addRow("ワイドモデル出力:", self._with_browse(self.wide_retrain_model_edit, file=True))
+
+        self.sanrenpuku_train_csv_edit = QLineEdit()
+        self.sanrenpuku_train_csv_edit.setPlaceholderText("data/sanrenpuku_train.csv")
+        retrain_form.addRow("3連複学習CSV出力:", self._with_browse(self.sanrenpuku_train_csv_edit, file=True))
+
+        self.sanrenpuku_retrain_model_edit = QLineEdit()
+        self.sanrenpuku_retrain_model_edit.setPlaceholderText("models/sanrenpuku_model.cbm")
+        retrain_form.addRow("3連複モデル出力:", self._with_browse(self.sanrenpuku_retrain_model_edit, file=True))
+
         retrain_layout.addLayout(retrain_form)
 
         retrain_btn_layout = QHBoxLayout()
@@ -514,14 +538,20 @@ class MainWindow(QMainWindow):
 
         self.retrain_wide_btn = QPushButton("ワイドモデル再学習")
         self.retrain_wide_btn.setMinimumHeight(36)
-        self.retrain_wide_btn.setEnabled(False)
-        self.retrain_wide_btn.setToolTip("未対応")
+        if _WIDE_RETRAIN_AVAILABLE:
+            self.retrain_wide_btn.clicked.connect(self._on_retrain_wide)
+        else:
+            self.retrain_wide_btn.setEnabled(False)
+            self.retrain_wide_btn.setToolTip("未対応 (スクリプトが見つかりません)")
         retrain_btn_layout.addWidget(self.retrain_wide_btn)
 
         self.retrain_sanrenpuku_btn = QPushButton("3連複モデル再学習")
         self.retrain_sanrenpuku_btn.setMinimumHeight(36)
-        self.retrain_sanrenpuku_btn.setEnabled(False)
-        self.retrain_sanrenpuku_btn.setToolTip("未対応")
+        if _SANRENPUKU_RETRAIN_AVAILABLE:
+            self.retrain_sanrenpuku_btn.clicked.connect(self._on_retrain_sanrenpuku)
+        else:
+            self.retrain_sanrenpuku_btn.setEnabled(False)
+            self.retrain_sanrenpuku_btn.setToolTip("未対応 (スクリプトが見つかりません)")
         retrain_btn_layout.addWidget(self.retrain_sanrenpuku_btn)
 
         self.retrain_all_btn = QPushButton("全部再学習")
@@ -712,6 +742,18 @@ class MainWindow(QMainWindow):
         place_retrain_model = cfg.get("place_retrain_model") or str(REPO_ROOT / "models" / "place_model.cbm")
         self.place_retrain_model_edit.setText(place_retrain_model)
 
+        # ワイド再学習パス
+        wide_train_csv = cfg.get("wide_train_csv") or str(REPO_ROOT / "data" / "wide_train.csv")
+        self.wide_train_csv_edit.setText(wide_train_csv)
+        wide_retrain_model = cfg.get("wide_retrain_model") or str(REPO_ROOT / "models" / "wide_model.cbm")
+        self.wide_retrain_model_edit.setText(wide_retrain_model)
+
+        # 3連複再学習パス
+        sanrenpuku_train_csv = cfg.get("sanrenpuku_train_csv") or str(REPO_ROOT / "data" / "sanrenpuku_train.csv")
+        self.sanrenpuku_train_csv_edit.setText(sanrenpuku_train_csv)
+        sanrenpuku_retrain_model = cfg.get("sanrenpuku_retrain_model") or str(REPO_ROOT / "models" / "sanrenpuku_model.cbm")
+        self.sanrenpuku_retrain_model_edit.setText(sanrenpuku_retrain_model)
+
         # ウィンドウサイズ
         geom = cfg.get("window_geometry")
         if geom:
@@ -745,6 +787,10 @@ class MainWindow(QMainWindow):
             "weekend_filter": self.weekend_chk.isChecked(),
             "place_train_csv": self.place_train_csv_edit.text().strip(),
             "place_retrain_model": self.place_retrain_model_edit.text().strip(),
+            "wide_train_csv": self.wide_train_csv_edit.text().strip(),
+            "wide_retrain_model": self.wide_retrain_model_edit.text().strip(),
+            "sanrenpuku_train_csv": self.sanrenpuku_train_csv_edit.text().strip(),
+            "sanrenpuku_retrain_model": self.sanrenpuku_retrain_model_edit.text().strip(),
             "window_geometry": {
                 "x": geom.x(),
                 "y": geom.y(),
@@ -1309,6 +1355,8 @@ class MainWindow(QMainWindow):
         self.search_races_btn.setEnabled(not running)
         self.refresh_results_btn.setEnabled(not running)
         self.retrain_place_btn.setEnabled(not running and _PLACE_RETRAIN_AVAILABLE)
+        self.retrain_wide_btn.setEnabled(not running and _WIDE_RETRAIN_AVAILABLE)
+        self.retrain_sanrenpuku_btn.setEnabled(not running and _SANRENPUKU_RETRAIN_AVAILABLE)
         self.retrain_all_btn.setEnabled(not running and _PLACE_RETRAIN_AVAILABLE)
         self.cancel_btn.setEnabled(running)
 
@@ -1517,15 +1565,153 @@ class MainWindow(QMainWindow):
         else:
             self._log("[再学習] キャンセルされました" if self._cancelled else "[再学習] エラーで終了しました")
 
+    def _build_retrain_wide_commands(self) -> list[list[str]] | None:
+        """ワイドモデル再学習用の 2 ステップコマンドリストを構築して返す。
+
+        ステップ:
+          1. build_wide_training_data.py -- 学習データ CSV を生成
+          2. train_wide_model.py         -- CatBoost でワイドモデルを学習
+
+        DB パスが未入力の場合はダイアログを表示して None を返す。
+        """
+        db = self.db_edit.text().strip()
+        if not self._require(db, "DB パス"):
+            return None
+
+        train_csv = self.wide_train_csv_edit.text().strip()
+        if not train_csv:
+            train_csv = str(REPO_ROOT / "data" / "wide_train.csv")
+
+        model_out = self.wide_retrain_model_edit.text().strip()
+        if not model_out:
+            model_out = str(REPO_ROOT / "models" / "wide_model.cbm")
+
+        build_data_cmd = [
+            sys.executable,
+            _script("build_wide_training_data.py"),
+            "--db", db,
+            "--out", train_csv,
+        ]
+
+        train_cmd = [
+            sys.executable,
+            _script("train_wide_model.py"),
+            "--train-csv", train_csv,
+            "--model-out", model_out,
+        ]
+
+        return [build_data_cmd, train_cmd]
+
+    def _on_retrain_wide(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "確認",
+            "ワイドモデルを再学習しますか？\n\n"
+            "以下のスクリプトを順番に実行します:\n"
+            "1. build_wide_training_data.py\n"
+            "2. train_wide_model.py",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        cmds = self._build_retrain_wide_commands()
+        if cmds is None:
+            return
+
+        self._log("=" * 60)
+        self._log("[再学習] ワイドモデル再学習を開始します")
+        self._set_running(True)
+        self._cancelled = False
+        self._run_sequential(cmds, on_finish=self._on_retrain_wide_done)
+
+    def _on_retrain_wide_done(self, success: bool) -> None:
+        self._set_running(False)
+        if success:
+            self._log("[再学習] ワイドモデル再学習 完了")
+        else:
+            self._log("[再学習] キャンセルされました" if self._cancelled else "[再学習] エラーで終了しました")
+
+    def _build_retrain_sanrenpuku_commands(self) -> list[list[str]] | None:
+        """3連複モデル再学習用の 2 ステップコマンドリストを構築して返す。
+
+        ステップ:
+          1. build_sanrenpuku_training_data.py -- 学習データ CSV を生成
+          2. train_sanrenpuku_model.py         -- CatBoost で3連複モデルを学習
+
+        DB パスが未入力の場合はダイアログを表示して None を返す。
+        """
+        db = self.db_edit.text().strip()
+        if not self._require(db, "DB パス"):
+            return None
+
+        train_csv = self.sanrenpuku_train_csv_edit.text().strip()
+        if not train_csv:
+            train_csv = str(REPO_ROOT / "data" / "sanrenpuku_train.csv")
+
+        model_out = self.sanrenpuku_retrain_model_edit.text().strip()
+        if not model_out:
+            model_out = str(REPO_ROOT / "models" / "sanrenpuku_model.cbm")
+
+        build_data_cmd = [
+            sys.executable,
+            _script("build_sanrenpuku_training_data.py"),
+            "--db", db,
+            "--out", train_csv,
+        ]
+
+        train_cmd = [
+            sys.executable,
+            _script("train_sanrenpuku_model.py"),
+            "--train-csv", train_csv,
+            "--model-out", model_out,
+        ]
+
+        return [build_data_cmd, train_cmd]
+
+    def _on_retrain_sanrenpuku(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "確認",
+            "3連複モデルを再学習しますか？\n\n"
+            "以下のスクリプトを順番に実行します:\n"
+            "1. build_sanrenpuku_training_data.py\n"
+            "2. train_sanrenpuku_model.py",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        cmds = self._build_retrain_sanrenpuku_commands()
+        if cmds is None:
+            return
+
+        self._log("=" * 60)
+        self._log("[再学習] 3連複モデル再学習を開始します")
+        self._set_running(True)
+        self._cancelled = False
+        self._run_sequential(cmds, on_finish=self._on_retrain_sanrenpuku_done)
+
+    def _on_retrain_sanrenpuku_done(self, success: bool) -> None:
+        self._set_running(False)
+        if success:
+            self._log("[再学習] 3連複モデル再学習 完了")
+        else:
+            self._log("[再学習] キャンセルされました" if self._cancelled else "[再学習] エラーで終了しました")
+
     def _on_retrain_all(self) -> None:
         reply = QMessageBox.question(
             self,
             "確認",
-            "全モデルを再学習しますか？\n（現在は複勝モデルのみ対応）\n\n"
+            "全モデルを再学習しますか？\n（複勝 → ワイド → 3連複の順に実行）\n\n"
             "以下のスクリプトを順番に実行します:\n"
             "1. build_tables_from_raw.py\n"
             "2. build_place_training_data.py\n"
-            "3. train_place_model.py",
+            "3. train_place_model.py\n"
+            "4. build_wide_training_data.py\n"
+            "5. train_wide_model.py\n"
+            "6. build_sanrenpuku_training_data.py\n"
+            "7. train_sanrenpuku_model.py",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
@@ -1535,8 +1721,20 @@ class MainWindow(QMainWindow):
         if cmds is None:
             return
 
+        if _WIDE_RETRAIN_AVAILABLE:
+            wide_cmds = self._build_retrain_wide_commands()
+            if wide_cmds is None:
+                return
+            cmds = cmds + wide_cmds
+
+        if _SANRENPUKU_RETRAIN_AVAILABLE:
+            sanrenpuku_cmds = self._build_retrain_sanrenpuku_commands()
+            if sanrenpuku_cmds is None:
+                return
+            cmds = cmds + sanrenpuku_cmds
+
         self._log("=" * 60)
-        self._log("[再学習] 全モデル再学習を開始します（複勝のみ）")
+        self._log("[再学習] 全モデル再学習を開始します（複勝 → ワイド → 3連複）")
         self._set_running(True)
         self._cancelled = False
         self._run_sequential(cmds, on_finish=self._on_retrain_all_done)

@@ -245,6 +245,80 @@ python scripts/predict_place.py --db jv_data.db --race-key <RACE_KEY> --model mo
 
 ---
 
+## ワイド (Wide) モデル
+
+同一レース内の全馬ペアに対して、両馬とも複勝圏 (is_place=1) なら target=1 とするペア分類モデルです。
+
+### 学習データ生成
+
+```bat
+python scripts/build_wide_training_data.py --db jv_data.db --out data/wide_train.csv
+```
+
+オプション:
+
+| オプション              | デフォルト             | 説明                                     |
+|----------------------|----------------------|------------------------------------------|
+| `--db`               | `jv_data.db`         | SQLite DB ファイルパス                    |
+| `--out`              | `data/wide_train.csv`| 出力 CSV パス                             |
+| `--from`             | (なし)               | 取得開始日 (例: `20200101`)               |
+| `--to`               | (なし)               | 取得終了日 (例: `20231231`)               |
+| `--neg-sample-per-pos`| `10`                | 陽性 1 件あたり陰性ダウンサンプル数         |
+| `--seed`             | `42`                 | 乱数シード                                |
+
+### 学習
+
+```bat
+python scripts/train_wide_model.py --train-csv data/wide_train.csv --model-out models/wide_model.cbm
+```
+
+出力: `models/wide_model.cbm`
+
+### 推論
+
+```bat
+python scripts/predict_wide.py --db jv_data.db --race-key <RACE_KEY> --model models/wide_model.cbm --topn 10
+```
+
+---
+
+## 3連複 (Sanrenpuku) モデル
+
+同一レース内の全馬トリプルに対して、3頭全てが複勝圏 (is_place=1) なら target=1 とするトリプル分類モデルです。
+
+### 学習データ生成
+
+```bat
+python scripts/build_sanrenpuku_training_data.py --db jv_data.db --out data/sanrenpuku_train.csv
+```
+
+オプション:
+
+| オプション              | デフォルト                    | 説明                                     |
+|----------------------|------------------------------|------------------------------------------|
+| `--db`               | `jv_data.db`                 | SQLite DB ファイルパス                    |
+| `--out`              | `data/sanrenpuku_train.csv`  | 出力 CSV パス                             |
+| `--from`             | (なし)                       | 取得開始日 (例: `20200101`)               |
+| `--to`               | (なし)                       | 取得終了日 (例: `20231231`)               |
+| `--neg-sample-per-pos`| `20`                        | 陽性 1 件あたり陰性ダウンサンプル数         |
+| `--seed`             | `42`                         | 乱数シード                                |
+
+### 学習
+
+```bat
+python scripts/train_sanrenpuku_model.py --train-csv data/sanrenpuku_train.csv --model-out models/sanrenpuku_model.cbm
+```
+
+出力: `models/sanrenpuku_model.cbm`
+
+### 推論
+
+```bat
+python scripts/predict_sanrenpuku.py --db jv_data.db --race-key <RACE_KEY> --model models/sanrenpuku_model.cbm --topn 10
+```
+
+---
+
 ## 複勝予測スクリプト
 
 学習済みモデルを使って指定レースの複勝圏確率 p_place を推論します。
