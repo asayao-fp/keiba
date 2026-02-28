@@ -91,6 +91,15 @@ _MANUAL_COL_TRAINER = 3
 _MANUAL_COL_HANDICAP = 4
 _MANUAL_COL_BODY_WEIGHT = 5
 
+# 距離プリセット (m)
+_DISTANCE_PRESETS = [1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400, 2500, 3000, 3200, 3400, 3600]
+
+# 馬場種別オプション
+_SURFACE_OPTIONS = ["", "芝", "ダート"]
+
+# モデルが持つ可能性のある馬場種別特徴量列名
+_KNOWN_SURFACE_COL_NAMES = {"surface", "surface_code", "track_surface"}
+
 # JRA 競馬場コード一覧 (表示名, コード)
 _COURSE_CODES: list[tuple[str, str]] = [
     ("札幌 (01)", "01"),
@@ -400,11 +409,26 @@ class MainWindow(QMainWindow):
         self.manual_distance_spin.setRange(0, 9999)
         self.manual_distance_spin.setValue(0)
         self.manual_distance_spin.setSuffix(" m")
-        manual_race_form.addRow("距離 * (m):", self.manual_distance_spin)
+        self.manual_distance_preset_combo = QComboBox()
+        self.manual_distance_preset_combo.addItem("選択")
+        for _d in _DISTANCE_PRESETS:
+            self.manual_distance_preset_combo.addItem(str(_d))
+        self.manual_distance_preset_combo.currentIndexChanged.connect(
+            self._on_distance_preset_changed
+        )
+        _dist_row = QHBoxLayout()
+        _dist_row.setContentsMargins(0, 0, 0, 0)
+        _dist_row.addWidget(self.manual_distance_spin)
+        _dist_row.addWidget(self.manual_distance_preset_combo)
+        manual_race_form.addRow("距離 * (m):", _dist_row)
 
         self.manual_track_combo = QComboBox()
         self.manual_track_combo.addItems(list(_TRACK_CONDITION_MAP.keys()))
         manual_race_form.addRow("馬場状態 *:", self.manual_track_combo)
+
+        self.manual_surface_combo = QComboBox()
+        self.manual_surface_combo.addItems(_SURFACE_OPTIONS)
+        manual_race_form.addRow("馬場種別 (芝/ダート):", self.manual_surface_combo)
 
         self.manual_grade_edit = QLineEdit()
         self.manual_grade_edit.setPlaceholderText("任意 (例: A, B, C, 15)")
@@ -1716,6 +1740,17 @@ class MainWindow(QMainWindow):
             self.manual_table.setItem(r, _MANUAL_COL_HORSE_NO, QTableWidgetItem(str(i)))
             self._update_manual_row_widgets(r)
 
+    def _on_distance_preset_changed(self, index: int) -> None:
+        """距離プリセットが選択されたときスピンボックスの値を更新する。"""
+        if index <= 0:
+            return
+        text = self.manual_distance_preset_combo.itemText(index)
+        try:
+            self.manual_distance_spin.setValue(int(text))
+        except ValueError:
+            # _DISTANCE_PRESETS は整数リストなので通常ここには到達しない
+            pass
+
     def _on_manual_predict(self) -> None:
         """入力値を検証して推論を実行し、結果を予測テーブルに表示する。"""
         errors: list[str] = []
@@ -1734,6 +1769,18 @@ class MainWindow(QMainWindow):
         track_condition_text = self.manual_track_combo.currentText()
         track_code = _TRACK_CONDITION_MAP.get(track_condition_text, "")
         grade_code = self.manual_grade_edit.text().strip()
+
+        # 馬場種別: モジュールレベルの特徴量列でサポートを確認
+        # _PRED_FEAT_COLS はモジュール起動時に確定し以降変化しないため、
+        # 予測ボタン押下ごとの参照で問題ない
+        _surface_col_name: str | None = None
+        if _PRED_FEAT_COLS:
+            _surface_col_name = next(
+                (c for c in _KNOWN_SURFACE_COL_NAMES if c in _PRED_FEAT_COLS), None
+            )
+        surface_text = self.manual_surface_combo.currentText()
+        if _surface_col_name and not surface_text:
+            errors.append("馬場種別 (芝/ダート) を選択してください。")
 
         if self.manual_table.rowCount() == 0:
             errors.append("出走馬を少なくとも 1 頭入力してください (「行追加」ボタン)。")
@@ -1785,7 +1832,7 @@ class MainWindow(QMainWindow):
                 errors.append(f"{row_label}: 馬体重は整数で入力してください。")
                 continue
 
-            entries.append({
+            entry: dict = {
                 "horse_no": horse_no_text,
                 "horse_id": horse_id,
                 "horse_name": horse_display,
@@ -1799,7 +1846,10 @@ class MainWindow(QMainWindow):
                 "distance_m": distance_m,
                 "track_code": track_code,
                 "grade_code": grade_code,
-            })
+            }
+            if _surface_col_name:
+                entry[_surface_col_name] = surface_text
+            entries.append(entry)
 
         if errors:
             QMessageBox.warning(
