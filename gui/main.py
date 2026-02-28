@@ -53,6 +53,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # scripts/ ディレクトリの絶対パス
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
+# 再学習スクリプトの存在チェック
+_PLACE_BUILD_SCRIPT = SCRIPTS_DIR / "build_place_training_data.py"
+_PLACE_TRAIN_SCRIPT = SCRIPTS_DIR / "train_place_model.py"
+_PLACE_RETRAIN_AVAILABLE = _PLACE_BUILD_SCRIPT.exists() and _PLACE_TRAIN_SCRIPT.exists()
+
 # scripts/ を sys.path に追加して fetch_races をインポート
 sys.path.insert(0, str(SCRIPTS_DIR))
 from list_races import fetch_races  # noqa: E402
@@ -481,6 +486,56 @@ class MainWindow(QMainWindow):
         self._manual_box.setContentLayout(manual_layout)
         root_layout.addWidget(self._manual_box)
 
+        # ── 再学習 ────────────────────────────────────
+        self._retrain_box = CollapsibleBox("再学習")
+        retrain_layout = QVBoxLayout()
+
+        retrain_form = QFormLayout()
+
+        self.place_train_csv_edit = QLineEdit()
+        self.place_train_csv_edit.setPlaceholderText("data/place_train.csv")
+        retrain_form.addRow("複勝学習CSV出力:", self._with_browse(self.place_train_csv_edit, file=True))
+
+        self.place_retrain_model_edit = QLineEdit()
+        self.place_retrain_model_edit.setPlaceholderText("models/place_model.cbm")
+        retrain_form.addRow("複勝モデル出力:", self._with_browse(self.place_retrain_model_edit, file=True))
+
+        retrain_layout.addLayout(retrain_form)
+
+        retrain_btn_layout = QHBoxLayout()
+
+        self.retrain_place_btn = QPushButton("複勝モデル再学習")
+        self.retrain_place_btn.setMinimumHeight(36)
+        self.retrain_place_btn.clicked.connect(self._on_retrain_place)
+        if not _PLACE_RETRAIN_AVAILABLE:
+            self.retrain_place_btn.setEnabled(False)
+            self.retrain_place_btn.setToolTip("未対応 (スクリプトが見つかりません)")
+        retrain_btn_layout.addWidget(self.retrain_place_btn)
+
+        self.retrain_wide_btn = QPushButton("ワイドモデル再学習")
+        self.retrain_wide_btn.setMinimumHeight(36)
+        self.retrain_wide_btn.setEnabled(False)
+        self.retrain_wide_btn.setToolTip("未対応")
+        retrain_btn_layout.addWidget(self.retrain_wide_btn)
+
+        self.retrain_sanrenpuku_btn = QPushButton("3連複モデル再学習")
+        self.retrain_sanrenpuku_btn.setMinimumHeight(36)
+        self.retrain_sanrenpuku_btn.setEnabled(False)
+        self.retrain_sanrenpuku_btn.setToolTip("未対応")
+        retrain_btn_layout.addWidget(self.retrain_sanrenpuku_btn)
+
+        self.retrain_all_btn = QPushButton("全部再学習")
+        self.retrain_all_btn.setMinimumHeight(36)
+        self.retrain_all_btn.clicked.connect(self._on_retrain_all)
+        if not _PLACE_RETRAIN_AVAILABLE:
+            self.retrain_all_btn.setEnabled(False)
+            self.retrain_all_btn.setToolTip("未対応 (スクリプトが見つかりません)")
+        retrain_btn_layout.addWidget(self.retrain_all_btn)
+
+        retrain_layout.addLayout(retrain_btn_layout)
+        self._retrain_box.setContentLayout(retrain_layout)
+        root_layout.addWidget(self._retrain_box)
+
         # ── ログ出力 ──────────────────────────────────
         self._log_box = CollapsibleBox("ログ")
         log_layout = QVBoxLayout()
@@ -651,6 +706,12 @@ class MainWindow(QMainWindow):
         self.keyword_edit.setText(cfg.get("search_keyword", ""))
         self.weekend_chk.setChecked(cfg.get("weekend_filter", False))
 
+        # 複勝再学習パス
+        place_train_csv = cfg.get("place_train_csv") or str(REPO_ROOT / "data" / "place_train.csv")
+        self.place_train_csv_edit.setText(place_train_csv)
+        place_retrain_model = cfg.get("place_retrain_model") or str(REPO_ROOT / "models" / "place_model.cbm")
+        self.place_retrain_model_edit.setText(place_retrain_model)
+
         # ウィンドウサイズ
         geom = cfg.get("window_geometry")
         if geom:
@@ -665,6 +726,7 @@ class MainWindow(QMainWindow):
         collapsed = cfg.get("ui_collapsed", {})
         self._settings_box.setCollapsed(collapsed.get("settings", False))
         self._races_box.setCollapsed(collapsed.get("races", False))
+        self._retrain_box.setCollapsed(collapsed.get("retrain", True))
         self._log_box.setCollapsed(collapsed.get("log", True))
         self._results_box.setCollapsed(collapsed.get("results", True))
         self._manual_box.setCollapsed(collapsed.get("manual", True))
@@ -681,6 +743,8 @@ class MainWindow(QMainWindow):
             "race_keys": self.racekeys_edit.text().strip(),
             "search_keyword": self.keyword_edit.text().strip(),
             "weekend_filter": self.weekend_chk.isChecked(),
+            "place_train_csv": self.place_train_csv_edit.text().strip(),
+            "place_retrain_model": self.place_retrain_model_edit.text().strip(),
             "window_geometry": {
                 "x": geom.x(),
                 "y": geom.y(),
@@ -690,6 +754,7 @@ class MainWindow(QMainWindow):
             "ui_collapsed": {
                 "settings": self._settings_box.isCollapsed(),
                 "races": self._races_box.isCollapsed(),
+                "retrain": self._retrain_box.isCollapsed(),
                 "log": self._log_box.isCollapsed(),
                 "results": self._results_box.isCollapsed(),
                 "manual": self._manual_box.isCollapsed(),
@@ -1243,6 +1308,8 @@ class MainWindow(QMainWindow):
         self.load_races_btn.setEnabled(not running)
         self.search_races_btn.setEnabled(not running)
         self.refresh_results_btn.setEnabled(not running)
+        self.retrain_place_btn.setEnabled(not running and _PLACE_RETRAIN_AVAILABLE)
+        self.retrain_all_btn.setEnabled(not running and _PLACE_RETRAIN_AVAILABLE)
         self.cancel_btn.setEnabled(running)
 
     # ── Update (RACE) ─────────────────────────────────
@@ -1372,6 +1439,114 @@ class MainWindow(QMainWindow):
             self._on_refresh_results()
         else:
             self._log("[Update+Suggest] キャンセルされました" if self._cancelled else "[Update+Suggest] エラーで終了しました")
+
+    # ── 再学習 ────────────────────────────────────────
+
+    def _build_retrain_place_commands(self) -> list[list[str]] | None:
+        """複勝モデル再学習用の 3 ステップコマンドリストを構築して返す。
+
+        ステップ:
+          1. build_tables_from_raw.py  -- 正規化テーブルを最新化
+          2. build_place_training_data.py -- 学習データ CSV を生成
+          3. train_place_model.py      -- CatBoost で複勝モデルを学習
+
+        DB パスが未入力の場合はダイアログを表示して None を返す。
+        """
+        db = self.db_edit.text().strip()
+        if not self._require(db, "DB パス"):
+            return None
+
+        train_csv = self.place_train_csv_edit.text().strip()
+        if not train_csv:
+            train_csv = str(REPO_ROOT / "data" / "place_train.csv")
+
+        model_out = self.place_retrain_model_edit.text().strip()
+        if not model_out:
+            model_out = str(REPO_ROOT / "models" / "place_model.cbm")
+
+        build_tables_cmd = [
+            sys.executable,
+            _script("build_tables_from_raw.py"),
+            "--db", db,
+        ]
+
+        build_data_cmd = [
+            sys.executable,
+            _script("build_place_training_data.py"),
+            "--db", db,
+            "--out", train_csv,
+        ]
+
+        train_cmd = [
+            sys.executable,
+            _script("train_place_model.py"),
+            "--train-csv", train_csv,
+            "--model-out", model_out,
+        ]
+
+        return [build_tables_cmd, build_data_cmd, train_cmd]
+
+    def _on_retrain_place(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "確認",
+            "複勝モデルを再学習しますか？\n\n"
+            "以下のスクリプトを順番に実行します:\n"
+            "1. build_tables_from_raw.py\n"
+            "2. build_place_training_data.py\n"
+            "3. train_place_model.py",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        cmds = self._build_retrain_place_commands()
+        if cmds is None:
+            return
+
+        self._log("=" * 60)
+        self._log("[再学習] 複勝モデル再学習を開始します")
+        self._set_running(True)
+        self._cancelled = False
+        self._run_sequential(cmds, on_finish=self._on_retrain_place_done)
+
+    def _on_retrain_place_done(self, success: bool) -> None:
+        self._set_running(False)
+        if success:
+            self._log("[再学習] 複勝モデル再学習 完了")
+        else:
+            self._log("[再学習] キャンセルされました" if self._cancelled else "[再学習] エラーで終了しました")
+
+    def _on_retrain_all(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "確認",
+            "全モデルを再学習しますか？\n（現在は複勝モデルのみ対応）\n\n"
+            "以下のスクリプトを順番に実行します:\n"
+            "1. build_tables_from_raw.py\n"
+            "2. build_place_training_data.py\n"
+            "3. train_place_model.py",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        cmds = self._build_retrain_place_commands()
+        if cmds is None:
+            return
+
+        self._log("=" * 60)
+        self._log("[再学習] 全モデル再学習を開始します（複勝のみ）")
+        self._set_running(True)
+        self._cancelled = False
+        self._run_sequential(cmds, on_finish=self._on_retrain_all_done)
+
+    def _on_retrain_all_done(self, success: bool) -> None:
+        self._set_running(False)
+        if success:
+            self._log("[再学習] 全モデル再学習 完了")
+        else:
+            self._log("[再学習] キャンセルされました" if self._cancelled else "[再学習] エラーで終了しました")
 
     # ── キャンセル ────────────────────────────────────
 
