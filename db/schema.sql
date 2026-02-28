@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS races (
     race_no         TEXT    NOT NULL,
     grade_code      TEXT    NOT NULL,
     race_name_short TEXT    NOT NULL,
+    distance_m      INTEGER,
+    track_code      TEXT,
+    surface         TEXT,
     created_at      TEXT    NOT NULL
 );
 

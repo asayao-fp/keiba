@@ -32,6 +32,7 @@ COLUMNS = [
     "handicap_weight_x10",
     "distance_m",
     "track_code",
+    "surface",
     "is_place",
 ]
 
@@ -61,6 +62,7 @@ def fetch_training_rows(conn: sqlite3.Connection, date_from: str | None, date_to
             e.handicap_weight_x10,
             r.distance_m,
             r.track_code,
+            r.surface,
             e.is_place
         FROM entries e
         JOIN races r ON r.race_key = e.race_key

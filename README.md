@@ -107,7 +107,7 @@ rem 重賞レース (grade_code が空白以外) のみを出力テーブルに�
 python scripts/build_tables_from_raw.py --db jv_data.db --graded-only
 ```
 
-> **既存 DB への列追加 (冪等)**: `build_tables_from_raw.py` を再実行すると、`races` テーブルに `distance_m` / `track_code` 列が存在しない場合は自動的に追加されます。既に列が存在する場合はスキップされます。
+> **既存 DB への列追加 (冪等)**: `build_tables_from_raw.py` を再実行すると、`races` テーブルに `distance_m` / `track_code` / `surface` 列が存在しない場合は自動的に追加されます。既に列が存在する場合はスキップされます。
 
 ### オプション
 
@@ -140,6 +140,7 @@ python scripts/build_tables_from_raw.py --db jv_data.db --graded-only
 | race_name_short| TEXT    | 競走名略称 (全角3文字)                      |
 | distance_m     | INTEGER | 距離 (メートル, 取得不可の場合は NULL)       |
 | track_code     | TEXT    | トラックコード2009 (2桁, 取得不可の場合は NULL) |
+| surface        | TEXT    | 馬場種別 (芝/ダート/サンド/障害/不明, track_code から導出) |
 | created_at     | TEXT    | レコード生成日時 (ISO 8601)                 |
 
 #### `entries` テーブル
@@ -208,18 +209,21 @@ sqlite3 jv_data.db "SELECT COUNT(*), MIN(distance_m), MAX(distance_m), AVG(dista
 
 rem トラックコードごとのレース数
 sqlite3 jv_data.db "SELECT track_code, COUNT(*) FROM races WHERE track_code IS NOT NULL GROUP BY track_code ORDER BY COUNT(*) DESC;"
+
+rem 馬場種別ごとのレース数
+sqlite3 jv_data.db "SELECT surface, COUNT(*) FROM races GROUP BY surface ORDER BY COUNT(*) DESC;"
 ```
 
 ---
 
 ## 予測モデル (複勝圏)
 
-`races.distance_m` (距離, メートル) と `races.track_code` (トラックコード2009) が学習・推論の特徴量として使用されます。
+`races.distance_m` (距離, メートル)、`races.track_code` (トラックコード2009)、および `races.surface` (馬場種別: 芝/ダート/サンド/障害/不明) が学習・推論の特徴量として使用されます。
 
-| 特徴量カテゴリ  | 列名                                                           |
-|--------------|----------------------------------------------------------------|
-| 数値特徴量     | `body_weight`, `handicap_weight_x10`, `distance_m`            |
-| カテゴリ特徴量 | `jockey_code`, `trainer_code`, `course_code`, `grade_code`, `track_code` |
+| 特徴量カテゴリ  | 列名                                                                        |
+|--------------|-----------------------------------------------------------------------------|
+| 数値特徴量     | `body_weight`, `handicap_weight_x10`, `distance_m`                         |
+| カテゴリ特徴量 | `jockey_code`, `trainer_code`, `course_code`, `grade_code`, `track_code`, `surface` |
 
 ### 学習データ生成
 
