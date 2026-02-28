@@ -69,7 +69,7 @@ def parse_ra(payload: str):
     RA レコード (レース詳細, 1272 byte) をパースして dict を返す。
     レコード種別識別子が 'RA' でない場合、または RA7 など RA 以外の
     サブタイプの場合は None を返す。
-    RA9 レコードは距離フィールドのオフセットが異なる (pos 698)。
+    RA1/RA2/RA9 レコードは距離フィールドのオフセットが pos 698 にある。
     """
     b = payload.encode("cp932")
     record_spec = payload[:3]
@@ -86,10 +86,10 @@ def parse_ra(payload: str):
     grade_code  = _sb(b, 615, 1)
 
     # 距離 (メートル)
-    # RA9 レコードは距離フィールドが pos 698 にある (非 RA9 は pos 637)
-    # RA9 で pos 698 が空/非数値の場合は pos 637 にフォールバック
+    # RA1/RA2/RA9 レコードは距離フィールドが pos 698 にある (4 バイト, メートル)
+    # それ以外のサブタイプは pos 637 にフォールバック (1 桁カテゴリコード)
     distance_m = None
-    if record_spec == "RA9":
+    if record_spec in ("RA1", "RA2", "RA9"):
         distance_m = _parse_distance(b, 698)
     if distance_m is None:
         distance_m = _parse_distance(b, 637)
@@ -306,6 +306,10 @@ def build_tables(db_path: str, graded_only: bool) -> None:
     )
 
     ra_count = 0
+    ra1_count = 0
+    ra1_missing_dist = 0
+    ra2_count = 0
+    ra2_missing_dist = 0
     ra9_count = 0
     ra9_missing_dist = 0
     se_count = 0
@@ -321,7 +325,15 @@ def build_tables(db_path: str, graded_only: bool) -> None:
             rec = parse_ra(payload)
             if rec is None:
                 continue
-            if record_spec == "RA9":
+            if record_spec == "RA1":
+                ra1_count += 1
+                if rec["distance_m"] is None:
+                    ra1_missing_dist += 1
+            elif record_spec == "RA2":
+                ra2_count += 1
+                if rec["distance_m"] is None:
+                    ra2_missing_dist += 1
+            elif record_spec == "RA9":
                 ra9_count += 1
                 if rec["distance_m"] is None:
                     ra9_missing_dist += 1
@@ -493,6 +505,8 @@ def build_tables(db_path: str, graded_only: bool) -> None:
     conn.close()
 
     print(f"[INFO] RA パース: {ra_count} 件 → races テーブル: {race_total} 件")
+    print(f"[INFO] RA1 パース: {ra1_count} 件 (距離 NULL: {ra1_missing_dist} 件)")
+    print(f"[INFO] RA2 パース: {ra2_count} 件 (距離 NULL: {ra2_missing_dist} 件)")
     print(f"[INFO] RA9 パース: {ra9_count} 件 (距離 NULL: {ra9_missing_dist} 件)")
     print(f"[INFO] SE パース: {se_count} 件 → entries テーブル: {entry_total} 件, horses テーブル: {horse_total} 件")
     print(f"[INFO] jockey_aliases: {jockey_alias_total} 件, trainer_aliases: {trainer_alias_total} 件")
