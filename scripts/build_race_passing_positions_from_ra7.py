@@ -9,6 +9,7 @@ raw_jv_records テーブルの RA7 レコードを解析して race_passing_posi
 """
 
 import argparse
+import re
 import sqlite3
 import sys
 
@@ -21,6 +22,7 @@ DEFAULT_TAIL_LEN = 900
 # ただし RA7 では実際の race_key 位置が仕様書通りでない場合があるため
 # guess_race_key() で既知の race_key セットから探索する
 RA7_RECORD_SPEC = "RA"
+MAX_HORSE_NO = 28  # JRA 規定の1レース最大頭数
 
 
 def build_table(conn: sqlite3.Connection) -> None:
@@ -61,80 +63,90 @@ def load_field_sizes(conn: sqlite3.Connection) -> dict:
     return {row[0]: row[1] for row in cur.fetchall()}
 
 
-def guess_race_key(text: str, known_keys: set, tail_len: int) -> str | None:
+def guess_race_key(text: str, known_keys: set) -> str | None:
     """
-    RA7 テキストの末尾 tail_len バイト相当の部分から既知の race_key (16文字) を探す。
-    先頭から順に 16文字を切り出して既知セットと照合する。
+    RA7 テキストの先頭 120 文字から既知の race_key を探す。
+    数字のみ抽出して既知キーとのマッチングを行い、最長一致を返す。
     """
-    # RA7 の race_key は先頭 2(RecordSpec) + 1(DataKubun) + 8(MakeDate) = 11 バイト後から
-    # 実際には RecordSpec 含む先頭から 16 文字の範囲に race_key が存在する
-    # RA7 仕様: RecordSpec(2) DataKubun(1) MakeDate(8) RaceID(16) ...
-    # RaceID はオフセット 11 から 16 文字
-    candidate = text[11:27]
-    if candidate in known_keys:
-        return candidate
-    # フォールバック: 先頭から走査
-    for i in range(0, min(50, len(text) - 16)):
-        candidate = text[i : i + 16]
-        if candidate in known_keys:
-            return candidate
-    return None
+    head = text[:120]
+    digits = ''.join(re.findall(r'\d', head))
+    best: str | None = None
+    for rk in known_keys:
+        if rk in digits:
+            # race_key はすべて同一長 (16桁) のため、複数ヒット時は先頭に近い位置の
+            # ものを優先する。同長の場合は最初に見つかったものを保持。
+            if best is None or len(rk) > len(best):
+                best = rk
+    return best
 
 
-def extract_corner_positions(tail: str, field_size: int, valid_horse_nos: set) -> dict:
+def extract_corner_positions(
+    text: str, field_size: int, valid_horse_nos: set, tail_len: int = DEFAULT_TAIL_LEN
+) -> dict:
     """
-    RA7 テキスト末尾から各コーナー通過順を抽出する。
+    RA7 テキストから各コーナー通過順を抽出する。
 
-    RA7 の通過順フォーマット (仕様書より):
-    各コーナーは「馬番(2桁)」を連結したもの。
-    コーナー数分のブロックが並ぶ。
+    全角スペースを半角に正規化し、末尾 tail_len 文字を数字のみの文字列に変換して
+    コーナーブロックパターン 1[block]2[block]3[block]4[block] を探索する。
+    (block = field_size * 2 桁、各馬番は2桁ゼロパディング)
 
     Returns: {corner: [horse_no_int, ...]} (corner = 1..4)
     """
-    # RA7 末尾の通過順ブロック解析
-    # 通過順は各コーナーあたり最大 field_size * 2 桁
-    # 仕様: Lap=1 のみ対象 (コーナー通過順)
-    # tail から "コーナー数" と通過順を読み取る
-    # RA7 テキスト内での通過順領域:
-    #   LapTimeInfo ブロックの後に KakuteiFlag + 各コーナー通過順が並ぶ
-    # 実装上は tail 末尾から固定オフセットで各コーナーブロックを読む
+    # 全角スペース → 半角スペースへ正規化
+    normalized = text.replace('\u3000', ' ')
+    tail = normalized[-tail_len:]
 
-    # 各コーナーブロックサイズ = field_size * 2 桁
-    block = field_size * 2
+    # 数字のみ抽出
+    digits = re.sub(r'\D', '', tail)
+
     corners: dict = {}
 
-    # tail の末尾側に 4 コーナー分のブロックが並んでいると仮定
-    # コーナー4 が最末尾寄りに、コーナー1 が先頭寄りに配置
-    # 十分な長さがあるか確認
-    needed = block * 4
-    if len(tail) < needed:
+    if field_size <= 0:
         return corners
 
-    # 末尾から 4ブロック分を取り出す
-    segment = tail[-needed:]
+    block = field_size * 2           # コーナーごとの桁数 (馬番 2桁 × 頭数)
+    total_len = 4 * (1 + block)      # 4コーナー分: 各 (1マーカー + block桁)
 
-    for corner_idx in range(4):
-        start = corner_idx * block
-        chunk = segment[start : start + block]
-        positions = []
-        valid = True
-        for i in range(0, len(chunk), 2):
-            token = chunk[i : i + 2]
-            try:
-                hn = int(token)
-            except ValueError:
-                valid = False
-                break
-            if hn == 0:
-                # ゼロパディング終端
-                break
-            positions.append(hn)
-        if not valid:
+    for i in range(len(digits) - total_len + 1):
+        if digits[i] != '1':
             continue
-        # 有効馬番のみに絞り込み
-        filtered = [h for h in positions if h in valid_horse_nos]
-        if filtered:
-            corners[corner_idx + 1] = filtered
+
+        # 各コーナーマーカーの位置を計算
+        m1 = i
+        m2 = m1 + 1 + block
+        m3 = m2 + 1 + block
+        m4 = m3 + 1 + block
+        end = m4 + 1 + block
+
+        if end > len(digits):
+            break
+
+        # コーナーマーカー 2, 3, 4 の確認
+        if digits[m2] != '2' or digits[m3] != '3' or digits[m4] != '4':
+            continue
+
+        # 各コーナーの馬番を抽出
+        for corner, (start, stop) in enumerate(
+            [(m1 + 1, m2), (m2 + 1, m3), (m3 + 1, m4), (m4 + 1, end)],
+            start=1,
+        ):
+            chunk = digits[start:stop]
+            positions: list = []
+            seen: set = set()
+            for j in range(0, len(chunk), 2):
+                if j + 2 > len(chunk):
+                    break
+                hn = int(chunk[j : j + 2])
+                if hn == 0:
+                    continue  # ゼロパディング (未使用スロット)
+                if 1 <= hn <= MAX_HORSE_NO and hn in valid_horse_nos and hn not in seen:
+                    positions.append(hn)
+                    seen.add(hn)
+            if positions:
+                corners[corner] = positions
+
+        if corners:
+            break
 
     return corners
 
@@ -189,7 +201,9 @@ def main() -> None:
         sys.exit(1)
 
     rows_inserted = 0
-    rows_skipped = 0
+    skipped_no_race_key = 0
+    skipped_no_entries = 0
+    skipped_no_corners = 0
     bad_rows = 0
     race_key_counts: dict = {}
 
@@ -213,21 +227,20 @@ def main() -> None:
             bad_rows += 1
             continue
 
-        race_key = guess_race_key(payload, known_keys, args.tail_len)
+        race_key = guess_race_key(payload, known_keys)
         if race_key is None:
-            rows_skipped += 1
+            skipped_no_race_key += 1
             continue
 
         valid_horse_nos = entries_horse_nos.get(race_key, set())
         field_size = field_sizes.get(race_key, 0)
         if field_size == 0 or not valid_horse_nos:
-            rows_skipped += 1
+            skipped_no_entries += 1
             continue
 
-        tail = payload[-args.tail_len :]
-        corners = extract_corner_positions(tail, field_size, valid_horse_nos)
+        corners = extract_corner_positions(payload, field_size, valid_horse_nos, args.tail_len)
         if not corners:
-            rows_skipped += 1
+            skipped_no_corners += 1
             continue
 
         added = 0
@@ -250,7 +263,9 @@ def main() -> None:
     conn.close()
 
     max_per_race = max(race_key_counts.values()) if race_key_counts else 0
-    print(f"[INFO] 挿入: {rows_inserted} 行, スキップ: {rows_skipped} 件, 不正レコード: {bad_rows} 件")
+    rows_skipped = skipped_no_race_key + skipped_no_entries + skipped_no_corners
+    print(f"[INFO] 挿入: {rows_inserted} 行, スキップ合計: {rows_skipped} 件, 不正レコード: {bad_rows} 件")
+    print(f"[INFO]   スキップ内訳 -- race_key 未発見: {skipped_no_race_key}, エントリなし: {skipped_no_entries}, コーナー情報なし: {skipped_no_corners}")
     print(f"[INFO] レース数: {len(race_key_counts)}, race_key 最大行数: {max_per_race}")
 
 
