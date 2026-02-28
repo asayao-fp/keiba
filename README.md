@@ -224,6 +224,37 @@ sqlite3 jv_data.db "SELECT surface, COUNT(*) FROM races GROUP BY surface ORDER B
 |--------------|-----------------------------------------------------------------------------|
 | 数値特徴量     | `body_weight`, `handicap_weight_x10`, `distance_m`                         |
 | カテゴリ特徴量 | `jockey_code`, `trainer_code`, `course_code`, `grade_code`, `track_code`, `surface` |
+| 通過順特徴量   | `avg_pos_1c_last3`, `avg_pos_4c_last3`, `avg_gain_last3`, `front_rate_last3`, `avg_pos_1c_pct_last3`, `avg_pos_4c_pct_last3`, `n_past` |
+
+### 学習前の事前準備 (特徴量テーブル構築)
+
+通過順特徴量を使用するため、学習データ生成の前に以下の 2 スクリプトを実行してください。
+
+**ステップ 1: RA7 通過順テーブルの構築**
+
+`raw_jv_records` の RA7 レコードを解析して `race_passing_positions` テーブルを作成します。
+
+```bat
+python scripts/build_race_passing_positions_from_ra7.py --db jv_data.db
+```
+
+| オプション      | デフォルト | 説明                                      |
+|--------------|---------|------------------------------------------|
+| `--db`       | `jv_data.db` | SQLite DB ファイルパス                  |
+| `--tail-len` | `900`   | RA7 レコード末尾から参照する文字数            |
+
+**ステップ 2: 馬別過去通過順特徴量テーブルの構築**
+
+`race_passing_positions` を元に `horse_past_passing_features` テーブルを作成します。
+
+```bat
+python scripts/build_horse_past_passing_features.py --db jv_data.db --n-last 3
+```
+
+| オプション    | デフォルト | 説明                                   |
+|------------|---------|---------------------------------------|
+| `--db`     | `jv_data.db` | SQLite DB ファイルパス               |
+| `--n-last` | `3`     | 集計対象の過去レース数                    |
 
 ### 学習データ生成
 

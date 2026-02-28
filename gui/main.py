@@ -61,7 +61,14 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 # 再学習スクリプトの存在チェック
 _PLACE_BUILD_SCRIPT = SCRIPTS_DIR / "build_place_training_data.py"
 _PLACE_TRAIN_SCRIPT = SCRIPTS_DIR / "train_place_model.py"
-_PLACE_RETRAIN_AVAILABLE = _PLACE_BUILD_SCRIPT.exists() and _PLACE_TRAIN_SCRIPT.exists()
+_PLACE_RA7_SCRIPT = SCRIPTS_DIR / "build_race_passing_positions_from_ra7.py"
+_PLACE_PASSING_FEATURES_SCRIPT = SCRIPTS_DIR / "build_horse_past_passing_features.py"
+_PLACE_RETRAIN_AVAILABLE = (
+    _PLACE_BUILD_SCRIPT.exists()
+    and _PLACE_TRAIN_SCRIPT.exists()
+    and _PLACE_RA7_SCRIPT.exists()
+    and _PLACE_PASSING_FEATURES_SCRIPT.exists()
+)
 
 _WIDE_BUILD_SCRIPT = SCRIPTS_DIR / "build_wide_training_data.py"
 _WIDE_TRAIN_SCRIPT = SCRIPTS_DIR / "train_wide_model.py"
@@ -1653,6 +1660,19 @@ class MainWindow(QMainWindow):
             "--db", db,
         ]
 
+        build_passing_positions_cmd = [
+            sys.executable,
+            _script("build_race_passing_positions_from_ra7.py"),
+            "--db", db,
+        ]
+
+        build_passing_features_cmd = [
+            sys.executable,
+            _script("build_horse_past_passing_features.py"),
+            "--db", db,
+            "--n-last", "3",
+        ]
+
         build_data_cmd = [
             sys.executable,
             _script("build_place_training_data.py"),
@@ -1667,7 +1687,7 @@ class MainWindow(QMainWindow):
             "--model-out", model_out,
         ]
 
-        return [build_tables_cmd, build_data_cmd, train_cmd]
+        return [build_tables_cmd, build_passing_positions_cmd, build_passing_features_cmd, build_data_cmd, train_cmd]
 
     def _on_retrain_place(self) -> None:
         reply = QMessageBox.question(
@@ -1676,8 +1696,10 @@ class MainWindow(QMainWindow):
             "複勝モデルを再学習しますか？\n\n"
             "以下のスクリプトを順番に実行します:\n"
             "1. build_tables_from_raw.py\n"
-            "2. build_place_training_data.py\n"
-            "3. train_place_model.py",
+            "2. build_race_passing_positions_from_ra7.py\n"
+            "3. build_horse_past_passing_features.py\n"
+            "4. build_place_training_data.py\n"
+            "5. train_place_model.py",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
