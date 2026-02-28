@@ -13,6 +13,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -87,6 +88,11 @@ CONFIG_PATH = REPO_ROOT / ".keiba_gui_config.json"
 
 # スナップショット保存ディレクトリ (ユーザーホーム下)
 PRESETS_DIR = Path.home() / ".keiba" / "presets"
+
+# スナップショットファイルのパターン: YYYYMMDD_HHMMSS_<kind>.json
+_SNAPSHOT_RE = re.compile(r"^\d{8}_\d{6}_.+\.json$")
+# 保持するスナップショットの最大件数
+_MAX_SNAPSHOTS = 10
 
 # レース選択テーブルの列ヘッダー
 _RACE_TABLE_COLS = ["✓", "レース名", "競馬場", "R", "距離", "馬場", "グレード", "race_key"]
@@ -2765,6 +2771,25 @@ class MainWindow(QMainWindow):
             self._log(f"[履歴] スナップショットを保存: {path.name}")
         except Exception as exc:
             self._log(f"[履歴] スナップショット保存失敗: {exc}")
+            return
+        self._prune_snapshots()
+
+    def _prune_snapshots(self) -> None:
+        """PRESETS_DIR 内のスナップショットを最新 _MAX_SNAPSHOTS 件だけ保持する。"""
+        try:
+            files = sorted(
+                [f for f in PRESETS_DIR.glob("*.json") if _SNAPSHOT_RE.match(f.name)],
+                key=lambda f: f.name,
+                reverse=True,
+            )
+        except Exception as exc:
+            self._log(f"[履歴] スナップショット一覧取得失敗: {exc}")
+            return
+        for old in files[_MAX_SNAPSHOTS:]:
+            try:
+                old.unlink()
+            except Exception as exc:
+                self._log(f"[履歴] 古いスナップショット削除失敗: {old.name}: {exc}")
 
     def _apply_snapshot(self, data: dict) -> None:
         """スナップショット dict の内容を GUI に反映する。"""
