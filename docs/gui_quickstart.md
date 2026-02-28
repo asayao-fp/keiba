@@ -10,6 +10,10 @@
 | **Suggest** | 複勝買い目提案を一括生成 (64-bit) |
 | **Update + Suggest** | Update → Suggest を連続して実行 |
 | **キャンセル** | 実行中のプロセスを停止してキューをクリア |
+| **複勝モデル再学習** | build_tables_from_raw → build_place_training_data → train_place_model を連続実行 |
+| **ワイドモデル再学習** | build_wide_training_data → train_wide_model を連続実行 |
+| **3連複モデル再学習** | build_sanrenpuku_training_data → train_sanrenpuku_model を連続実行 |
+| **全部再学習** | 複勝 → ワイド → 3連複 の順に全モデルを再学習 |
 
 ---
 
@@ -236,6 +240,59 @@ python scripts/batch_suggest_place_bets.py \
 
 出力 CSV は `<出力ディレクトリ>/summary.csv` に生成されます。  
 各レースの予測 JSON は `pred_<race_key>.json`、買い目 JSON は `bets_<race_key>.json` として出力されます。
+
+---
+
+## モデル再学習
+
+「**再学習**」セクションを展開してモデルを再学習できます。
+
+### 再学習パス設定
+
+| 項目 | デフォルト | 説明 |
+|------|-----------|------|
+| 複勝学習CSV出力 | `<repo>/data/place_train.csv` | 複勝学習データの出力先 |
+| 複勝モデル出力 | `<repo>/models/place_model.cbm` | 複勝モデルの出力先 |
+| ワイド学習CSV出力 | `<repo>/data/wide_train.csv` | ワイド学習データの出力先 |
+| ワイドモデル出力 | `<repo>/models/wide_model.cbm` | ワイドモデルの出力先 |
+| 3連複学習CSV出力 | `<repo>/data/sanrenpuku_train.csv` | 3連複学習データの出力先 |
+| 3連複モデル出力 | `<repo>/models/sanrenpuku_model.cbm` | 3連複モデルの出力先 |
+
+### 複勝モデル再学習
+
+1. 「**複勝モデル再学習**」ボタンを押します。
+2. 確認ダイアログで「Yes」を選択します。
+3. 以下のスクリプトが順に実行されます:
+   1. `build_tables_from_raw.py` — 正規化テーブルを最新化
+   2. `build_place_training_data.py` — 学習データ CSV を生成
+   3. `train_place_model.py` — CatBoost で複勝モデルを学習
+
+予想所要時間: データ量によりますが数分〜30分程度。
+
+### ワイドモデル再学習
+
+1. 「**ワイドモデル再学習**」ボタンを押します。
+2. 確認ダイアログで「Yes」を選択します。
+3. 以下のスクリプトが順に実行されます:
+   1. `build_wide_training_data.py` — 全ペアの学習データ CSV を生成 (`data/wide_train.csv`)
+   2. `train_wide_model.py` — CatBoost でワイドモデルを学習 (`models/wide_model.cbm`)
+
+予想所要時間: 複勝より長く、10分〜1時間程度 (ペア数は馬数の二乗に比例)。
+
+### 3連複モデル再学習
+
+1. 「**3連複モデル再学習**」ボタンを押します。
+2. 確認ダイアログで「Yes」を選択します。
+3. 以下のスクリプトが順に実行されます:
+   1. `build_sanrenpuku_training_data.py` — 全トリプルの学習データ CSV を生成 (`data/sanrenpuku_train.csv`)
+   2. `train_sanrenpuku_model.py` — CatBoost で3連複モデルを学習 (`models/sanrenpuku_model.cbm`)
+
+予想所要時間: ワイドよりさらに長く、30分〜数時間程度 (トリプル数は馬数の三乗に比例)。
+
+### 全部再学習
+
+「**全部再学習**」ボタンを押すと、複勝 → ワイド → 3連複 の順に全モデルを再学習します。  
+内部では `build_tables_from_raw.py` が最初に一度だけ実行されます。
 
 ---
 
