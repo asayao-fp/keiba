@@ -91,6 +91,33 @@ _MANUAL_COL_TRAINER = 3
 _MANUAL_COL_HANDICAP = 4
 _MANUAL_COL_BODY_WEIGHT = 5
 
+# 距離プリセット (表示名, m値; 0 = 選択しない)
+_DISTANCE_PRESETS: list[tuple[str, int]] = [
+    ("プリセット選択", 0),
+    ("1000m", 1000),
+    ("1200m", 1200),
+    ("1400m", 1400),
+    ("1500m", 1500),
+    ("1600m", 1600),
+    ("1800m", 1800),
+    ("2000m", 2000),
+    ("2200m", 2200),
+    ("2400m", 2400),
+    ("2500m", 2500),
+    ("2600m", 2600),
+    ("3000m", 3000),
+    ("3200m", 3200),
+    ("3600m", 3600),
+]
+
+# 馬場種別ドロップダウン (表示名, コード)
+_SURFACE_ITEMS: list[tuple[str, str]] = [("芝", "T"), ("ダート", "D")]
+
+# モデル特徴量に馬場種別フィールドが含まれる場合の候補列名
+_SURFACE_FEATURE_NAMES = frozenset(
+    {"surface", "surface_code", "track_type", "baba_kind", "surface_type"}
+)
+
 # JRA 競馬場コード一覧 (表示名, コード)
 _COURSE_CODES: list[tuple[str, str]] = [
     ("札幌 (01)", "01"),
@@ -400,11 +427,33 @@ class MainWindow(QMainWindow):
         self.manual_distance_spin.setRange(0, 9999)
         self.manual_distance_spin.setValue(0)
         self.manual_distance_spin.setSuffix(" m")
-        manual_race_form.addRow("距離 * (m):", self.manual_distance_spin)
+        self.manual_distance_preset_combo = QComboBox()
+        for _label, _val in _DISTANCE_PRESETS:
+            self.manual_distance_preset_combo.addItem(_label, _val)
+        self.manual_distance_preset_combo.setToolTip("よく使われる距離を選択するとスピンボックスに反映されます")
+        self.manual_distance_preset_combo.currentIndexChanged.connect(
+            self._on_distance_preset_changed
+        )
+        _distance_widget = QWidget()
+        _distance_hbox = QHBoxLayout(_distance_widget)
+        _distance_hbox.setContentsMargins(0, 0, 0, 0)
+        _distance_hbox.addWidget(self.manual_distance_preset_combo)
+        _distance_hbox.addWidget(self.manual_distance_spin)
+        manual_race_form.addRow("距離 * (m):", _distance_widget)
 
         self.manual_track_combo = QComboBox()
         self.manual_track_combo.addItems(list(_TRACK_CONDITION_MAP.keys()))
         manual_race_form.addRow("馬場状態 *:", self.manual_track_combo)
+
+        self.manual_surface_combo = QComboBox()
+        for _slabel, _scode in _SURFACE_ITEMS:
+            self.manual_surface_combo.addItem(_slabel, _scode)
+        _surface_required = (
+            _PRED_FEAT_COLS is not None
+            and bool(_SURFACE_FEATURE_NAMES & set(_PRED_FEAT_COLS))
+        )
+        _surface_row_label = "馬場種別 *:" if _surface_required else "馬場種別 (任意):"
+        manual_race_form.addRow(_surface_row_label, self.manual_surface_combo)
 
         self.manual_grade_edit = QLineEdit()
         self.manual_grade_edit.setPlaceholderText("任意 (例: A, B, C, 15)")
@@ -1529,6 +1578,12 @@ class MainWindow(QMainWindow):
                 f" (source: {metrics['source']})"
             )
 
+    def _on_distance_preset_changed(self, index: int) -> None:
+        """距離プリセットコンボが変更されたときにスピンボックスへ反映する。"""
+        val = self.manual_distance_preset_combo.itemData(index)
+        if val:
+            self.manual_distance_spin.setValue(val)
+
     def _on_manual_load_masters(self) -> None:
         """DB からマスタデータを読み込んでテーブルのドロップダウンを更新する。"""
         db = self.db_edit.text().strip()
@@ -1735,6 +1790,15 @@ class MainWindow(QMainWindow):
         track_code = _TRACK_CONDITION_MAP.get(track_condition_text, "")
         grade_code = self.manual_grade_edit.text().strip()
 
+        # 馬場種別 (モデルが対応する場合のみバリデーション)
+        surface_code = self.manual_surface_combo.currentData()
+        _surface_col = next(
+            (col for col in (_PRED_FEAT_COLS or []) if col in _SURFACE_FEATURE_NAMES),
+            None,
+        )
+        if _surface_col is not None and not surface_code:
+            errors.append("馬場種別を選択してください。")
+
         if self.manual_table.rowCount() == 0:
             errors.append("出走馬を少なくとも 1 頭入力してください (「行追加」ボタン)。")
 
@@ -1785,7 +1849,7 @@ class MainWindow(QMainWindow):
                 errors.append(f"{row_label}: 馬体重は整数で入力してください。")
                 continue
 
-            entries.append({
+            entry: dict = {
                 "horse_no": horse_no_text,
                 "horse_id": horse_id,
                 "horse_name": horse_display,
@@ -1799,7 +1863,10 @@ class MainWindow(QMainWindow):
                 "distance_m": distance_m,
                 "track_code": track_code,
                 "grade_code": grade_code,
-            })
+            }
+            if _surface_col and surface_code:
+                entry[_surface_col] = surface_code
+            entries.append(entry)
 
         if errors:
             QMessageBox.warning(
