@@ -51,14 +51,29 @@ def _sb(b: bytes, pos: int, length: int) -> str:
     return b[pos - 1 : pos - 1 + length].decode("cp932", errors="ignore")
 
 
+def _parse_distance(b: bytes, pos: int) -> int | None:
+    """pos (1始まり) から 4 バイトを切り出して距離 (正の整数) に変換する。変換できない場合は None。"""
+    distance_raw = _sb(b, pos, 4).strip()
+    if distance_raw:
+        try:
+            dm = int(distance_raw)
+            if dm > 0:
+                return dm
+        except ValueError:
+            pass
+    return None
+
+
 def parse_ra(payload: str):
     """
     RA レコード (レース詳細, 1272 byte) をパースして dict を返す。
     レコード種別識別子が 'RA' でない場合、または RA7 など RA 以外の
     サブタイプの場合は None を返す。
+    RA9 レコードは距離フィールドのオフセットが異なる (pos 698)。
     """
     b = payload.encode("cp932")
-    if len(b) < 707 or payload[:2] != "RA" or payload[:3] == "RA7":
+    record_spec = payload[:3]
+    if len(b) < 707 or payload[:2] != "RA" or record_spec == "RA7":
         return None
 
     yyyy        = _sb(b, 12, 4)
@@ -71,15 +86,13 @@ def parse_ra(payload: str):
     grade_code  = _sb(b, 615, 1)
 
     # 距離 (メートル)
+    # RA9 レコードは距離フィールドが pos 698 にある (非 RA9 は pos 637)
+    # RA9 で pos 698 が空/非数値の場合は pos 637 にフォールバック
     distance_m = None
-    distance_raw = _sb(b, 637, 4).strip()
-    if distance_raw:
-        try:
-            dm = int(distance_raw)
-            if dm > 0:
-                distance_m = dm
-        except ValueError:
-            pass
+    if record_spec == "RA9":
+        distance_m = _parse_distance(b, 698)
+    if distance_m is None:
+        distance_m = _parse_distance(b, 637)
 
     # トラックコード (2009)
     track_code = _sb(b, 706, 2).strip() or None
@@ -293,18 +306,25 @@ def build_tables(db_path: str, graded_only: bool) -> None:
     )
 
     ra_count = 0
+    ra9_count = 0
+    ra9_missing_dist = 0
     se_count = 0
     processed = 0
 
     for (payload,) in cursor:
         if not payload:
             continue
+        record_spec = payload[:3]
         record_type = payload[:2]
 
         if record_type == "RA":
             rec = parse_ra(payload)
             if rec is None:
                 continue
+            if record_spec == "RA9":
+                ra9_count += 1
+                if rec["distance_m"] is None:
+                    ra9_missing_dist += 1
             conn.execute(
                 """
                 INSERT INTO races
@@ -473,6 +493,7 @@ def build_tables(db_path: str, graded_only: bool) -> None:
     conn.close()
 
     print(f"[INFO] RA パース: {ra_count} 件 → races テーブル: {race_total} 件")
+    print(f"[INFO] RA9 パース: {ra9_count} 件 (距離 NULL: {ra9_missing_dist} 件)")
     print(f"[INFO] SE パース: {se_count} 件 → entries テーブル: {entry_total} 件, horses テーブル: {horse_total} 件")
     print(f"[INFO] jockey_aliases: {jockey_alias_total} 件, trainer_aliases: {trainer_alias_total} 件")
     print(f"[INFO] horse_latest_metrics: {metrics_total} 件")
