@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QCompleter,
     QDateEdit,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHeaderView,
@@ -125,7 +126,7 @@ _RACE_TABLE_COLS = ["✓", "レース名", "競馬場", "R", "距離", "馬場",
 # 予想結果テーブルの列ヘッダー
 _SUMMARY_TABLE_COLS = ["レース名", "競馬場", "R", "S", "買い目数", "賭金計", "期待値計", "avg p", "F/B", "race_key"]
 _BETS_TABLE_COLS = ["馬番", "賭金", "p_place", "オッズ使用", "期待値(円)", "EV/1unit"]
-_PRED_TABLE_COLS = ["順位", "馬番", "馬名", "騎手名", "調教師名", "p_place", "着順", "複勝圏", "TP"]
+_PRED_TABLE_COLS = ["順位", "馬番", "馬名", "騎手名", "調教師名", "p_place", "horse_edge (p-avg)", "race_confidence (p1-p2)", "着順", "複勝圏", "TP"]
 
 # 真陽性ハイライト色 (予測上位かつ複勝圏的中)
 _TP_HIGHLIGHT_COLOR = QColor("#c8f5c8")
@@ -882,6 +883,32 @@ class MainWindow(QMainWindow):
         self.has_odds_chk.setToolTip("place_odds テーブルにオッズが存在する馬のみ表示")
         self.has_odds_chk.stateChanged.connect(self._on_pred_filter_changed)
         pred_filter_row.addWidget(self.has_odds_chk)
+        self.min_p_place_chk = QCheckBox("最小p_place ≥")
+        self.min_p_place_chk.setToolTip("チェックで有効: p_place がこの値以上の馬のみ表示")
+        self.min_p_place_chk.stateChanged.connect(self._on_pred_filter_changed)
+        pred_filter_row.addWidget(self.min_p_place_chk)
+        self.min_p_place_spin = QDoubleSpinBox()
+        self.min_p_place_spin.setMinimum(0.0)
+        self.min_p_place_spin.setMaximum(1.0)
+        self.min_p_place_spin.setSingleStep(0.05)
+        self.min_p_place_spin.setDecimals(2)
+        self.min_p_place_spin.setValue(0.0)
+        self.min_p_place_spin.setToolTip("馬フィルタ: p_place がこの値以上の馬のみ表示 (左のチェックボックスで有効化)")
+        self.min_p_place_spin.valueChanged.connect(self._on_pred_filter_changed)
+        pred_filter_row.addWidget(self.min_p_place_spin)
+        self.min_race_conf_chk = QCheckBox("最小confidence ≥")
+        self.min_race_conf_chk.setToolTip("チェックで有効: race_confidence (p1-p2) がこの値以上のレースのみ表示")
+        self.min_race_conf_chk.stateChanged.connect(self._on_pred_filter_changed)
+        pred_filter_row.addWidget(self.min_race_conf_chk)
+        self.min_race_conf_spin = QDoubleSpinBox()
+        self.min_race_conf_spin.setMinimum(0.0)
+        self.min_race_conf_spin.setMaximum(1.0)
+        self.min_race_conf_spin.setSingleStep(0.05)
+        self.min_race_conf_spin.setDecimals(2)
+        self.min_race_conf_spin.setValue(0.0)
+        self.min_race_conf_spin.setToolTip("レースフィルタ: race_confidence (p1-p2) がこの値以上のレースのみ表示 (左のチェックボックスで有効化)")
+        self.min_race_conf_spin.valueChanged.connect(self._on_pred_filter_changed)
+        pred_filter_row.addWidget(self.min_race_conf_spin)
         results_layout.addLayout(pred_filter_row)
 
         # 予測テーブル
@@ -957,6 +984,12 @@ class MainWindow(QMainWindow):
         self.keyword_edit.setText(cfg.get("search_keyword", ""))
         self.weekend_chk.setChecked(cfg.get("weekend_filter", False))
 
+        # 予測フィルタ (信頼度・エッジ)
+        self.min_p_place_chk.setChecked(cfg.get("min_p_place_enabled", False))
+        self.min_p_place_spin.setValue(float(cfg.get("min_p_place", 0.0)))
+        self.min_race_conf_chk.setChecked(cfg.get("min_race_confidence_enabled", False))
+        self.min_race_conf_spin.setValue(float(cfg.get("min_race_confidence", 0.0)))
+
         # 複勝再学習パス
         place_train_csv = cfg.get("place_train_csv") or str(REPO_ROOT / "data" / "place_train.csv")
         self.place_train_csv_edit.setText(place_train_csv)
@@ -1026,6 +1059,10 @@ class MainWindow(QMainWindow):
             "race_keys": self.racekeys_edit.text().strip(),
             "search_keyword": self.keyword_edit.text().strip(),
             "weekend_filter": self.weekend_chk.isChecked(),
+            "min_p_place_enabled": self.min_p_place_chk.isChecked(),
+            "min_p_place": self.min_p_place_spin.value(),
+            "min_race_confidence_enabled": self.min_race_conf_chk.isChecked(),
+            "min_race_confidence": self.min_race_conf_spin.value(),
             "place_train_csv": self.place_train_csv_edit.text().strip(),
             "place_retrain_model": self.place_retrain_model_edit.text().strip(),
             "wide_train_csv": self.wide_train_csv_edit.text().strip(),
@@ -1400,6 +1437,15 @@ class MainWindow(QMainWindow):
         for i, pred in enumerate(sorted_preds, start=1):
             pred["rank"] = i
 
+        # race_confidence = p1 - p2 (上位2頭の p_place の差)
+        _valid_p = [float(p["p_place"]) for p in sorted_preds if p.get("p_place") is not None]
+        _race_conf = (_valid_p[0] - _valid_p[1]) if len(_valid_p) >= 2 else None
+        _mean_p = (sum(_valid_p) / len(_valid_p)) if _valid_p else None
+        for pred in sorted_preds:
+            pred["race_confidence"] = _race_conf
+            _p = pred.get("p_place")
+            pred["horse_edge"] = (float(_p) - _mean_p) if (_p is not None and _mean_p is not None) else None
+
         if not db or not Path(db).exists():
             return sorted_preds
 
@@ -1501,6 +1547,10 @@ class MainWindow(QMainWindow):
         topn = self.topn_spin.value()
         placed_only = self.placed_only_chk.isChecked()
         has_odds_only = self.has_odds_chk.isChecked()
+        min_p_place_enabled = self.min_p_place_chk.isChecked()
+        min_p_place = self.min_p_place_spin.value()
+        min_race_conf_enabled = self.min_race_conf_chk.isChecked()
+        min_race_conf = self.min_race_conf_spin.value()
 
         # "Show top N" フィルタ (rank 順 = p_place 降順ですでにソート済み)
         if topn > 0:
@@ -1511,6 +1561,12 @@ class MainWindow(QMainWindow):
 
         if has_odds_only:
             rows = [r for r in rows if r.get("has_odds")]
+
+        if min_p_place_enabled:
+            rows = [r for r in rows if (r.get("p_place") is not None and float(r["p_place"]) >= min_p_place)]
+
+        if min_race_conf_enabled:
+            rows = [r for r in rows if (r.get("race_confidence") is not None and r["race_confidence"] >= min_race_conf)]
 
         self.pred_table.setRowCount(0)
         highlight = QBrush(_TP_HIGHLIGHT_COLOR)
@@ -1529,6 +1585,8 @@ class MainWindow(QMainWindow):
 
             finish_pos = pred.get("finish_pos")
             is_place = pred.get("is_place")
+            horse_edge = pred.get("horse_edge")
+            race_confidence = pred.get("race_confidence")
 
             self.pred_table.setItem(r, 0, _item(pred.get("rank", "")))
             self.pred_table.setItem(r, 1, _item(pred.get("horse_no", "")))
@@ -1536,9 +1594,11 @@ class MainWindow(QMainWindow):
             self.pred_table.setItem(r, 3, _item(pred.get("jockey_name", "")))
             self.pred_table.setItem(r, 4, _item(pred.get("trainer_name", "")))
             self.pred_table.setItem(r, 5, _item(f"{float(pred.get('p_place', 0)):.4f}" if pred.get("p_place") is not None else ""))
-            self.pred_table.setItem(r, 6, _item(finish_pos if finish_pos is not None else ""))
-            self.pred_table.setItem(r, 7, _item("✓" if is_place else ("" if is_place is None else "✗")))
-            self.pred_table.setItem(r, 8, _item("✓" if is_tp else ""))
+            self.pred_table.setItem(r, 6, _item(f"{horse_edge:.3f}" if horse_edge is not None else ""))
+            self.pred_table.setItem(r, 7, _item(f"{race_confidence:.3f}" if race_confidence is not None else ""))
+            self.pred_table.setItem(r, 8, _item(finish_pos if finish_pos is not None else ""))
+            self.pred_table.setItem(r, 9, _item("✓" if is_place else ("" if is_place is None else "✗")))
+            self.pred_table.setItem(r, 10, _item("✓" if is_tp else ""))
 
     def _on_pred_filter_changed(self) -> None:
         """フィルタ変更時に予測テーブルを再描画する。"""
