@@ -143,13 +143,14 @@ _PLACE_RECO_TABLE_COLS = [
 
 # 手動予測セクションの定数
 _TRACK_CONDITION_MAP = {"良": "1", "稍重": "2", "重": "3", "不良": "4"}
-_MANUAL_ENTRY_COLS = ["馬番", "馬名", "騎手", "調教師", "斤量(kg)", "馬体重(kg)"]
+_MANUAL_ENTRY_COLS = ["馬番", "馬名", "騎手", "調教師", "斤量(kg)", "馬体重(kg)", "オッズ"]
 _MANUAL_COL_HORSE_NO = 0
 _MANUAL_COL_HORSE = 1
 _MANUAL_COL_JOCKEY = 2
 _MANUAL_COL_TRAINER = 3
 _MANUAL_COL_HANDICAP = 4
 _MANUAL_COL_BODY_WEIGHT = 5
+_MANUAL_COL_ODDS = 6
 
 # 距離プリセット (m)
 _DISTANCE_PRESETS = [1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400, 2500, 3000, 3200, 3400, 3600]
@@ -2865,6 +2866,17 @@ class MainWindow(QMainWindow):
                 errors.append(f"{row_label}: 馬体重は整数で入力してください。")
                 continue
 
+            # オッズ (任意)
+            odds_item = self.manual_table.item(row, _MANUAL_COL_ODDS)
+            odds_text = odds_item.text().strip() if odds_item else ""
+            odds_val: float | None = None
+            if odds_text:
+                try:
+                    odds_val = float(odds_text)
+                except ValueError:
+                    errors.append(f"{row_label}: オッズは数値で入力してください。")
+                    continue
+
             entry: dict = {
                 "horse_no": horse_no_text,
                 "horse_id": horse_id,
@@ -2879,6 +2891,7 @@ class MainWindow(QMainWindow):
                 "distance_m": distance_m,
                 "track_code": track_code,
                 "grade_code": grade_code,
+                "odds": odds_val,
             }
             if _surface_col_name:
                 entry[_surface_col_name] = surface_text
@@ -2937,14 +2950,35 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # モデルの実際の特徴量名を優先して使用する (訓練時の特徴量と一致させるため)
+        try:
+            actual_feat_cols: list[str] = list(model.feature_names_)
+        except AttributeError:
+            actual_feat_cols = list(feat_cols)
+
+        # モデルが odds を期待するかチェック
+        model_uses_odds = "odds" in actual_feat_cols
+
         df = _pd.DataFrame(entries)
         for col in num_feats:
-            df[col] = _pd.to_numeric(df[col], errors="coerce")
+            if col in df.columns:
+                df[col] = _pd.to_numeric(df[col], errors="coerce")
+        # odds が必要な場合は数値変換する
+        if model_uses_odds and "odds" in df.columns:
+            df["odds"] = _pd.to_numeric(df["odds"], errors="coerce")
         for col in cat_feats:
-            df[col] = df[col].fillna("").astype(str)
+            if col in df.columns:
+                df[col] = df[col].fillna("").astype(str)
+
+        # actual_feat_cols にない列は NaN で補完 (警告を出す)
+        missing_cols = [col for col in actual_feat_cols if col not in df.columns]
+        if missing_cols:
+            self._log(f"[手動予測] モデルが要求する列が入力にありません (NaN で補完): {missing_cols}")
+        for col in missing_cols:
+            df[col] = float("nan")
 
         try:
-            proba = model.predict_proba(df[feat_cols].copy())[:, 1]
+            proba = model.predict_proba(df[actual_feat_cols].copy())[:, 1]
         except Exception as exc:
             QMessageBox.critical(
                 self, "推論エラー", f"予測の実行に失敗しました:\n{exc}"
@@ -3020,6 +3054,9 @@ class MainWindow(QMainWindow):
             bw_item = self.manual_table.item(row, _MANUAL_COL_BODY_WEIGHT)
             body_weight = bw_item.text().strip() if bw_item else ""
 
+            odds_item = self.manual_table.item(row, _MANUAL_COL_ODDS)
+            odds = odds_item.text().strip() if odds_item else ""
+
             entries.append({
                 "horse_no": horse_no,
                 "horse_display": horse_display,
@@ -3030,6 +3067,7 @@ class MainWindow(QMainWindow):
                 "trainer_code": trainer_code,
                 "handicap": handicap,
                 "body_weight": body_weight,
+                "odds": odds,
             })
 
         course_code = self.manual_course_combo.currentData() or self.manual_course_combo.currentText().strip()
@@ -3146,6 +3184,7 @@ class MainWindow(QMainWindow):
 
                 self.manual_table.setItem(r, _MANUAL_COL_HANDICAP, QTableWidgetItem(entry.get("handicap", "")))
                 self.manual_table.setItem(r, _MANUAL_COL_BODY_WEIGHT, QTableWidgetItem(entry.get("body_weight", "")))
+                self.manual_table.setItem(r, _MANUAL_COL_ODDS, QTableWidgetItem(entry.get("odds", "")))
 
         if "wide_model" in data:
             self.wide_model_edit.setText(data["wide_model"])
