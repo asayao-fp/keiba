@@ -32,6 +32,10 @@ NUMERIC_FEATURES = [
     "avg_pos_1c_pct_last3",
     "avg_pos_4c_pct_last3",
     "n_past",
+    "body_weight_diff_mean",
+    "handicap_weight_x10_diff_mean",
+    "body_weight_z",
+    "handicap_weight_x10_z",
 ]
 FEATURE_COLS = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 TARGET_COL = "is_place"
@@ -251,6 +255,15 @@ def main():
         sys.exit(1)
 
     # 数値列を変換
+    missing_cols = [c for c in REQUIRED_FEATURE_COLS if c not in df.columns]
+    if missing_cols:
+        print(
+            f"[ERROR] 必須列が CSV に存在しません: {missing_cols}\n"
+            "       最新の build_place_training_data.py でデータを再生成してください。",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     for col in NUMERIC_FEATURES:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 

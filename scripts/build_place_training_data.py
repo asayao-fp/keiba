@@ -11,9 +11,11 @@ SQLite DB から学習データ CSV を生成する。
 
 import argparse
 import csv
+import math
 import os
 import sqlite3
 import sys
+from collections import defaultdict
 
 
 DEFAULT_DB_PATH = "jv_data.db"
@@ -41,6 +43,10 @@ COLUMNS = [
     "avg_pos_1c_pct_last3",
     "avg_pos_4c_pct_last3",
     "n_past",
+    "body_weight_diff_mean",
+    "handicap_weight_x10_diff_mean",
+    "body_weight_z",
+    "handicap_weight_x10_z",
     "is_place",
 ]
 
@@ -154,6 +160,66 @@ def fetch_training_rows(
     return cur.fetchall()
 
 
+def add_race_relative_features(rows: list) -> list:
+    """各 race_key グループ内で体重・斤量の平均差・z スコアを計算して付加する。
+
+    追加列 (この順に各行末尾へ追記):
+      body_weight_diff_mean         - body_weight - group mean
+      handicap_weight_x10_diff_mean - handicap_weight_x10 - group mean
+      body_weight_z                 - (body_weight - mean) / std; std==0 のときは 0.0
+      handicap_weight_x10_z         - (handicap_weight_x10 - mean) / std; std==0 のときは 0.0
+
+    グループ内で対象列が全 None の場合は派生列も None のままにする。
+    """
+    race_key_idx = COLUMNS.index("race_key")
+    bw_idx = COLUMNS.index("body_weight")
+    hw_idx = COLUMNS.index("handicap_weight_x10")
+
+    # グループ化 (インデックスのみ保持してメモリ効率を上げる)
+    group_indices: dict[str, list[int]] = defaultdict(list)
+    rows = [list(r) for r in rows]
+    for i, row in enumerate(rows):
+        group_indices[row[race_key_idx]].append(i)
+
+    for indices in group_indices.values():
+        bw_vals = [rows[i][bw_idx] for i in indices if rows[i][bw_idx] is not None]
+        hw_vals = [rows[i][hw_idx] for i in indices if rows[i][hw_idx] is not None]
+
+        bw_mean = sum(bw_vals) / len(bw_vals) if bw_vals else None
+        hw_mean = sum(hw_vals) / len(hw_vals) if hw_vals else None
+
+        # 母集団標準偏差を使用: レース内全頭が母集団そのものであるため N 除算が適切
+        bw_std: float | None = None
+        if len(bw_vals) > 1 and bw_mean is not None:
+            bw_std = math.sqrt(sum((v - bw_mean) ** 2 for v in bw_vals) / len(bw_vals))
+
+        hw_std: float | None = None
+        if len(hw_vals) > 1 and hw_mean is not None:
+            hw_std = math.sqrt(sum((v - hw_mean) ** 2 for v in hw_vals) / len(hw_vals))
+
+        for i in indices:
+            bw = rows[i][bw_idx]
+            hw = rows[i][hw_idx]
+
+            bw_diff = (bw - bw_mean) if (bw is not None and bw_mean is not None) else None
+            hw_diff = (hw - hw_mean) if (hw is not None and hw_mean is not None) else None
+
+            if bw is not None and bw_mean is not None and bw_std is not None:
+                bw_z: float | None = 0.0 if bw_std == 0.0 else (bw - bw_mean) / bw_std
+            else:
+                bw_z = None
+
+            if hw is not None and hw_mean is not None and hw_std is not None:
+                hw_z: float | None = 0.0 if hw_std == 0.0 else (hw - hw_mean) / hw_std
+            else:
+                hw_z = None
+
+            # SQL クエリは常に is_place を末尾に返す前提で、新列をその直前に挿入する
+            rows[i] = rows[i][:-1] + [bw_diff, hw_diff, bw_z, hw_z] + [rows[i][-1]]
+
+    return rows
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="SQLite DB から is_place 学習データ CSV を生成する"
@@ -213,6 +279,8 @@ def main():
 
     if not rows:
         print("[WARN] 出力対象の行が 0 件でした。", file=sys.stderr)
+
+    rows = add_race_relative_features(rows)
 
     out_dir = os.path.dirname(args.out)
     if out_dir:
