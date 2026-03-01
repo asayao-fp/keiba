@@ -78,6 +78,20 @@ _SANRENPUKU_BUILD_SCRIPT = SCRIPTS_DIR / "build_sanrenpuku_training_data.py"
 _SANRENPUKU_TRAIN_SCRIPT = SCRIPTS_DIR / "train_sanrenpuku_model.py"
 _SANRENPUKU_RETRAIN_AVAILABLE = _SANRENPUKU_BUILD_SCRIPT.exists() and _SANRENPUKU_TRAIN_SCRIPT.exists()
 
+# 複勝パイプライン (一括) スクリプト
+_PLACE_PIPELINE_BUILD_SCRIPT = SCRIPTS_DIR / "build_place_training_data.py"
+_PLACE_PIPELINE_SPLIT_SCRIPT = SCRIPTS_DIR / "split_labeled_unlabeled_csv.py"
+_PLACE_PIPELINE_TRAIN_SCRIPT = SCRIPTS_DIR / "train_place_model_lgbm.py"
+_PLACE_PIPELINE_PREDICT_SCRIPT = SCRIPTS_DIR / "predict_place_model_lgbm.py"
+_PLACE_PIPELINE_RECOMMEND_SCRIPT = SCRIPTS_DIR / "make_place_recommendations_rich.py"
+_PLACE_PIPELINE_AVAILABLE = (
+    _PLACE_PIPELINE_BUILD_SCRIPT.exists()
+    and _PLACE_PIPELINE_SPLIT_SCRIPT.exists()
+    and _PLACE_PIPELINE_TRAIN_SCRIPT.exists()
+    and _PLACE_PIPELINE_PREDICT_SCRIPT.exists()
+    and _PLACE_PIPELINE_RECOMMEND_SCRIPT.exists()
+)
+
 # scripts/ を sys.path に追加して fetch_races をインポート
 sys.path.insert(0, str(SCRIPTS_DIR))
 from list_races import fetch_races  # noqa: E402
@@ -117,6 +131,11 @@ _RANK_FALLBACK = 9999
 # 組み合わせ予測結果テーブルの列ヘッダー
 _WIDE_TABLE_COLS = ["順位", "race_key", "馬番A", "馬番B", "p_wide"]
 _SANRENPUKU_TABLE_COLS = ["順位", "race_key", "馬番A", "馬番B", "馬番C", "p_sanrenpuku"]
+_PLACE_RECO_TABLE_COLS = [
+    "race_date", "course_code", "race_no", "distance_m", "surface",
+    "grade_code", "race_name_short", "rank_in_race", "horse_no",
+    "horse_name", "jockey_name_short", "trainer_name_short", "pred_is_place_proba",
+]
 
 # 手動予測セクションの定数
 _TRACK_CONDITION_MAP = {"良": "1", "稍重": "2", "重": "3", "不良": "4"}
@@ -693,8 +712,77 @@ class MainWindow(QMainWindow):
         self._combo_box.setContentLayout(combo_layout)
         root_layout.addWidget(self._combo_box)
 
+        # ── 複勝 推奨生成 (一括) ───────────────────────
+        self._place_pipeline_box = CollapsibleBox("複勝 推奨生成 (一括)")
+        place_pipeline_layout = QVBoxLayout()
+
+        place_pipeline_form = QFormLayout()
+
+        # 日付範囲
+        self.place_pipeline_from_edit = QLineEdit()
+        self.place_pipeline_from_edit.setPlaceholderText("20200101 (空白 = 制限なし)")
+        place_pipeline_form.addRow("取得開始日 (From):", self.place_pipeline_from_edit)
+
+        self.place_pipeline_to_edit = QLineEdit()
+        self.place_pipeline_to_edit.setPlaceholderText("20231231 (空白 = 制限なし)")
+        place_pipeline_form.addRow("取得終了日 (To):", self.place_pipeline_to_edit)
+
+        # TopN
+        self.place_pipeline_topn_spin = QSpinBox()
+        self.place_pipeline_topn_spin.setRange(1, 200)
+        self.place_pipeline_topn_spin.setValue(3)
+        place_pipeline_form.addRow("上位 N 件 (TopN):", self.place_pipeline_topn_spin)
+
+        # モデルパス
+        self.place_pipeline_model_edit = QLineEdit()
+        self.place_pipeline_model_edit.setPlaceholderText("models/place_lgbm.pkl")
+        place_pipeline_form.addRow("モデルパス:", self._with_browse(self.place_pipeline_model_edit, file=True))
+
+        # データ出力ディレクトリ
+        self.place_pipeline_datadir_edit = QLineEdit()
+        self.place_pipeline_datadir_edit.setPlaceholderText("data/")
+        place_pipeline_form.addRow("データ出力ディレクトリ:", self._with_browse(self.place_pipeline_datadir_edit, file=False))
+
+        place_pipeline_layout.addLayout(place_pipeline_form)
+
+        # 実行ボタン
+        self.place_pipeline_btn = QPushButton("推奨生成 (一括実行)")
+        self.place_pipeline_btn.setMinimumHeight(36)
+        if _PLACE_PIPELINE_AVAILABLE:
+            self.place_pipeline_btn.clicked.connect(self._on_place_pipeline)
+        else:
+            self.place_pipeline_btn.setEnabled(False)
+            missing = [
+                s.name for s in [
+                    _PLACE_PIPELINE_BUILD_SCRIPT, _PLACE_PIPELINE_SPLIT_SCRIPT,
+                    _PLACE_PIPELINE_TRAIN_SCRIPT, _PLACE_PIPELINE_PREDICT_SCRIPT,
+                    _PLACE_PIPELINE_RECOMMEND_SCRIPT,
+                ] if not s.exists()
+            ]
+            self.place_pipeline_btn.setToolTip(
+                "未対応 (スクリプトが見つかりません: " + ", ".join(missing) + ")"
+            )
+        place_pipeline_layout.addWidget(self.place_pipeline_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+        # 推奨結果テーブル
+        place_pipeline_layout.addWidget(QLabel("複勝推奨結果:"))
+        self.place_reco_table = QTableWidget(0, len(_PLACE_RECO_TABLE_COLS))
+        self.place_reco_table.setHorizontalHeaderLabels(_PLACE_RECO_TABLE_COLS)
+        self.place_reco_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.place_reco_table.verticalHeader().setVisible(False)
+        self.place_reco_table.horizontalHeader().setSectionResizeMode(
+            _PLACE_RECO_TABLE_COLS.index("race_name_short"), QHeaderView.ResizeMode.Stretch
+        )
+        self.place_reco_table.horizontalHeader().setSectionResizeMode(
+            _PLACE_RECO_TABLE_COLS.index("horse_name"), QHeaderView.ResizeMode.Stretch
+        )
+        self.place_reco_table.setMinimumHeight(120)
+        place_pipeline_layout.addWidget(self.place_reco_table)
+
+        self._place_pipeline_box.setContentLayout(place_pipeline_layout)
+        root_layout.addWidget(self._place_pipeline_box)
+
         # ── ログ出力 ──────────────────────────────────
-        self._log_box = CollapsibleBox("ログ")
         log_layout = QVBoxLayout()
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
@@ -888,6 +976,15 @@ class MainWindow(QMainWindow):
         self.sanrenpuku_model_edit.setText(sanrenpuku_predict_model)
         self.combo_topn_spin.setValue(int(cfg.get("combo_topn", 10)))
 
+        # 複勝パイプライン設定
+        self.place_pipeline_from_edit.setText(cfg.get("place_pipeline_from", ""))
+        self.place_pipeline_to_edit.setText(cfg.get("place_pipeline_to", ""))
+        self.place_pipeline_topn_spin.setValue(int(cfg.get("place_pipeline_topn", 3)))
+        place_pipeline_model = cfg.get("place_pipeline_model") or str(REPO_ROOT / "models" / "place_lgbm.pkl")
+        self.place_pipeline_model_edit.setText(place_pipeline_model)
+        place_pipeline_datadir = cfg.get("place_pipeline_datadir") or str(REPO_ROOT / "data")
+        self.place_pipeline_datadir_edit.setText(place_pipeline_datadir)
+
         # ウィンドウサイズ
         geom = cfg.get("window_geometry")
         if geom:
@@ -904,6 +1001,7 @@ class MainWindow(QMainWindow):
         self._races_box.setCollapsed(collapsed.get("races", False))
         self._retrain_box.setCollapsed(collapsed.get("retrain", True))
         self._combo_box.setCollapsed(collapsed.get("combo", True))
+        self._place_pipeline_box.setCollapsed(collapsed.get("place_pipeline", True))
         self._log_box.setCollapsed(collapsed.get("log", True))
         self._results_box.setCollapsed(collapsed.get("results", True))
         self._manual_box.setCollapsed(collapsed.get("manual", True))
@@ -929,6 +1027,11 @@ class MainWindow(QMainWindow):
             "wide_predict_model": self.wide_model_edit.text().strip(),
             "sanrenpuku_predict_model": self.sanrenpuku_model_edit.text().strip(),
             "combo_topn": self.combo_topn_spin.value(),
+            "place_pipeline_from": self.place_pipeline_from_edit.text().strip(),
+            "place_pipeline_to": self.place_pipeline_to_edit.text().strip(),
+            "place_pipeline_topn": self.place_pipeline_topn_spin.value(),
+            "place_pipeline_model": self.place_pipeline_model_edit.text().strip(),
+            "place_pipeline_datadir": self.place_pipeline_datadir_edit.text().strip(),
             "window_geometry": {
                 "x": geom.x(),
                 "y": geom.y(),
@@ -940,6 +1043,7 @@ class MainWindow(QMainWindow):
                 "races": self._races_box.isCollapsed(),
                 "retrain": self._retrain_box.isCollapsed(),
                 "combo": self._combo_box.isCollapsed(),
+                "place_pipeline": self._place_pipeline_box.isCollapsed(),
                 "log": self._log_box.isCollapsed(),
                 "results": self._results_box.isCollapsed(),
                 "manual": self._manual_box.isCollapsed(),
@@ -1499,6 +1603,7 @@ class MainWindow(QMainWindow):
         self.retrain_all_btn.setEnabled(not running and _PLACE_RETRAIN_AVAILABLE)
         self.predict_wide_btn.setEnabled(not running)
         self.predict_sanrenpuku_btn.setEnabled(not running)
+        self.place_pipeline_btn.setEnabled(not running and _PLACE_PIPELINE_AVAILABLE)
         self.cancel_btn.setEnabled(running)
 
     # ── Update (RACE) ─────────────────────────────────
@@ -2034,6 +2139,160 @@ class MainWindow(QMainWindow):
             self.sanrenpuku_table.setItem(r, 3, QTableWidgetItem(str(row.get("horse_no_b", ""))))
             self.sanrenpuku_table.setItem(r, 4, QTableWidgetItem(str(row.get("horse_no_c", ""))))
             self.sanrenpuku_table.setItem(r, 5, QTableWidgetItem(str(row.get("p_sanrenpuku", ""))))
+
+    # ── 複勝 推奨生成 (一括) ────────────────────────────
+
+    def _build_place_pipeline_commands(self) -> list[list[str]] | None:
+        """5段階の複勝パイプラインコマンドリストを構築する。"""
+        # 必須スクリプトの存在確認
+        missing = [
+            s.name for s in [
+                _PLACE_PIPELINE_BUILD_SCRIPT, _PLACE_PIPELINE_SPLIT_SCRIPT,
+                _PLACE_PIPELINE_TRAIN_SCRIPT, _PLACE_PIPELINE_PREDICT_SCRIPT,
+                _PLACE_PIPELINE_RECOMMEND_SCRIPT,
+            ] if not s.exists()
+        ]
+        if missing:
+            QMessageBox.critical(
+                self,
+                "スクリプト不足",
+                "以下のスクリプトが見つかりません:\n" + "\n".join(missing),
+            )
+            return None
+
+        db = self.db_edit.text().strip()
+        if not self._require(db, "DB パス"):
+            return None
+
+        data_dir = self.place_pipeline_datadir_edit.text().strip() or str(REPO_ROOT / "data")
+        model_out = self.place_pipeline_model_edit.text().strip() or str(REPO_ROOT / "models" / "place_lgbm.pkl")
+        topn = self.place_pipeline_topn_spin.value()
+        date_from = self.place_pipeline_from_edit.text().strip()
+        date_to = self.place_pipeline_to_edit.text().strip()
+
+        data_dir_path = Path(data_dir)
+        combined_csv = str(data_dir_path / "place_train_with_unlabeled.csv")
+        train_csv = str(data_dir_path / "place_train_labeled.csv")
+        pred_csv = str(data_dir_path / "place_pred_unlabeled.csv")
+        scored_csv = str(data_dir_path / "place_pred_scored.csv")
+        recommendations_csv = str(data_dir_path / "place_recommendations_rich.csv")
+
+        # Step 1: build_place_training_data.py --include-unlabeled
+        build_cmd = [
+            sys.executable,
+            _script("build_place_training_data.py"),
+            "--db", db,
+            "--out", combined_csv,
+            "--include-unlabeled",
+        ]
+        if date_from:
+            build_cmd += ["--from", date_from]
+        if date_to:
+            build_cmd += ["--to", date_to]
+
+        # Step 2: split_labeled_unlabeled_csv.py
+        split_cmd = [
+            sys.executable,
+            _script("split_labeled_unlabeled_csv.py"),
+            "--in", combined_csv,
+            "--labeled", train_csv,
+            "--unlabeled", pred_csv,
+        ]
+
+        # Step 3: train_place_model_lgbm.py
+        train_cmd = [
+            sys.executable,
+            _script("train_place_model_lgbm.py"),
+            "--train-csv", train_csv,
+            "--model-out", model_out,
+        ]
+
+        # Step 4: predict_place_model_lgbm.py
+        predict_cmd = [
+            sys.executable,
+            _script("predict_place_model_lgbm.py"),
+            "--in", pred_csv,
+            "--model", model_out,
+            "--out", scored_csv,
+        ]
+
+        # Step 5: make_place_recommendations_rich.py
+        recommend_cmd = [
+            sys.executable,
+            _script("make_place_recommendations_rich.py"),
+            "--scored-csv", scored_csv,
+            "--db", db,
+            "--out", recommendations_csv,
+            "--topn", str(topn),
+        ]
+
+        return [build_cmd, split_cmd, train_cmd, predict_cmd, recommend_cmd]
+
+    def _on_place_pipeline(self) -> None:
+        cmds = self._build_place_pipeline_commands()
+        if cmds is None:
+            return
+        self._log("=" * 60)
+        self._log("[複勝パイプライン] 推奨生成パイプラインを開始します")
+        self._log("[複勝パイプライン] Step 1: データ生成 (build_place_training_data.py)")
+        self._log("[複勝パイプライン] Step 2: ラベル分割 (split_labeled_unlabeled_csv.py)")
+        self._log("[複勝パイプライン] Step 3: モデル学習 (train_place_model_lgbm.py)")
+        self._log("[複勝パイプライン] Step 4: スコアリング (predict_place_model_lgbm.py)")
+        self._log("[複勝パイプライン] Step 5: 推奨生成 (make_place_recommendations_rich.py)")
+        self.place_reco_table.setRowCount(0)
+        self._set_running(True)
+        self._cancelled = False
+        self._run_sequential(cmds, on_finish=self._on_place_pipeline_done)
+
+    def _on_place_pipeline_done(self, success: bool) -> None:
+        self._set_running(False)
+        if success:
+            self._log("[複勝パイプライン] 完了")
+            data_dir = self.place_pipeline_datadir_edit.text().strip() or str(REPO_ROOT / "data")
+            recommendations_csv = str(Path(data_dir) / "place_recommendations_rich.csv")
+            self._log(f"[複勝パイプライン] 推奨ファイル: {recommendations_csv}")
+            self._display_place_recommendations(recommendations_csv)
+            self._place_pipeline_box.setCollapsed(False)
+        else:
+            self._log(
+                "[複勝パイプライン] キャンセルされました"
+                if self._cancelled
+                else "[複勝パイプライン] エラーで終了しました"
+            )
+
+    def _display_place_recommendations(self, csv_path: str) -> None:
+        """place_recommendations_rich.csv を読み込んでテーブルに表示する。"""
+        self.place_reco_table.setRowCount(0)
+        try:
+            import csv as _csv
+            with open(csv_path, newline="", encoding="utf-8") as f:
+                reader = _csv.DictReader(f)
+                rows = list(reader)
+        except FileNotFoundError:
+            self._log(f"[複勝パイプライン] 推奨ファイルが見つかりません: {csv_path}")
+            return
+        except Exception as exc:
+            self._log(f"[複勝パイプライン] 推奨ファイル読み込み失敗: {exc}")
+            return
+
+        # race_date / course_code / race_no / rank_in_race でソート
+        def _sort_key(row: dict) -> tuple[str, str, str, str]:
+            return (
+                row.get("race_date", ""),
+                row.get("course_code", ""),
+                row.get("race_no", ""),
+                row.get("rank_in_race", ""),
+            )
+
+        rows.sort(key=_sort_key)
+
+        for row in rows:
+            r = self.place_reco_table.rowCount()
+            self.place_reco_table.insertRow(r)
+            for c, col in enumerate(_PLACE_RECO_TABLE_COLS):
+                self.place_reco_table.setItem(r, c, QTableWidgetItem(str(row.get(col, ""))))
+
+        self._log(f"[複勝パイプライン] {len(rows)} 件の推奨を表示しました")
 
     def _run_combo_sequential(
         self,
