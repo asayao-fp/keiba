@@ -783,6 +783,7 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self._place_pipeline_box)
 
         # ── ログ出力 ──────────────────────────────────
+        self._log_box = CollapsibleBox("ログ")
         log_layout = QVBoxLayout()
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
