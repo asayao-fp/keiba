@@ -68,7 +68,57 @@ def parse_args():
         metavar="PATH",
         help=f"モデル出力パス (デフォルト: {DEFAULT_MODEL_OUT})",
     )
+    parser.add_argument(
+        "--topk",
+        type=int,
+        default=3,
+        metavar="K",
+        help="Top-K for precision@k / hit_rate@k (デフォルト: 3)",
+    )
     return parser.parse_args()
+
+
+def compute_topk_metrics(race_keys, y_true, y_proba, k=3):
+    """各レースで上位 k 頭を選んだときの精度指標を返す。
+
+    Returns
+    -------
+    precision_at_1 : float
+    precision_at_k : float
+    hit_rate_at_k  : float
+    n_races        : int
+    """
+    val_df = pd.DataFrame(
+        {
+            "race_key": race_keys.values,
+            "is_place": y_true.values,
+            "p_place": y_proba,
+        }
+    ).dropna(subset=["race_key", "is_place", "p_place"])
+
+    precision_at_1_list = []
+    precision_at_k_list = []
+    hit_rate_at_k_list = []
+
+    for _, grp in val_df.groupby("race_key"):
+        grp_sorted = grp.sort_values("p_place", ascending=False)
+
+        top1 = grp_sorted.iloc[:1]
+        precision_at_1_list.append(float(top1["is_place"].mean()))
+
+        actual_k = min(k, len(grp_sorted))
+        topk = grp_sorted.iloc[:actual_k]
+        precision_at_k_list.append(float(topk["is_place"].mean()))
+        hit_rate_at_k_list.append(int(topk["is_place"].sum() > 0))
+
+    n_races = len(precision_at_1_list)
+    if n_races == 0:
+        return float("nan"), float("nan"), float("nan"), 0
+
+    precision_at_1 = sum(precision_at_1_list) / n_races
+    precision_at_k = sum(precision_at_k_list) / n_races
+    hit_rate_at_k = sum(hit_rate_at_k_list) / n_races
+    return precision_at_1, precision_at_k, hit_rate_at_k, n_races
 
 
 def main():
@@ -111,6 +161,9 @@ def main():
         X, y, test_size=0.2, random_state=42, stratify=y
     )
 
+    # race_key は特徴量に含まれないが TopK 指標の計算に使う
+    has_race_key = "race_key" in df.columns
+
     cat_feature_indices = [FEATURE_COLS.index(c) for c in CATEGORICAL_FEATURES]
 
     model = CatBoostClassifier(
@@ -132,6 +185,18 @@ def main():
     auc = roc_auc_score(y_val, y_pred_proba)
     acc = accuracy_score(y_val, y_pred)
     print(f"[INFO] Val AUC: {auc:.4f}  Accuracy: {acc:.4f}")
+    print(f"[INFO] Val entries: {len(X_val)}")
+
+    if not has_race_key:
+        print("[WARN] race_key 列が見つからないため TopK 指標をスキップします。")
+    else:
+        race_keys_val = df.loc[X_val.index, "race_key"]
+        k = args.topk
+        p1, pk, hr, n_races = compute_topk_metrics(race_keys_val, y_val, y_pred_proba, k=k)
+        print(f"[INFO] Val races: {n_races}")
+        print(f"[INFO] Precision@1: {p1:.4f}")
+        print(f"[INFO] Precision@{k}: {pk:.4f}")
+        print(f"[INFO] HitRate@{k}: {hr:.4f}")
 
     out_dir = os.path.dirname(args.model_out)
     if out_dir:
