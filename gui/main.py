@@ -92,6 +92,10 @@ _PLACE_PIPELINE_AVAILABLE = (
     and _PLACE_PIPELINE_RECOMMEND_SCRIPT.exists()
 )
 
+# 複勝 推奨生成 (一括) GUI セクションの表示/非表示フラグ
+# False に設定すると、当該セクションは GUI に追加されません。
+_ENABLE_PLACE_PIPELINE_GUI = False
+
 # scripts/ を sys.path に追加して fetch_races をインポート
 sys.path.insert(0, str(SCRIPTS_DIR))
 from list_races import fetch_races  # noqa: E402
@@ -713,74 +717,75 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self._combo_box)
 
         # ── 複勝 推奨生成 (一括) ───────────────────────
-        self._place_pipeline_box = CollapsibleBox("複勝 推奨生成 (一括)")
-        place_pipeline_layout = QVBoxLayout()
+        if _ENABLE_PLACE_PIPELINE_GUI:
+            self._place_pipeline_box = CollapsibleBox("複勝 推奨生成 (一括)")
+            place_pipeline_layout = QVBoxLayout()
 
-        place_pipeline_form = QFormLayout()
+            place_pipeline_form = QFormLayout()
 
-        # 日付範囲
-        self.place_pipeline_from_edit = QLineEdit()
-        self.place_pipeline_from_edit.setPlaceholderText("20200101 (空白 = 制限なし)")
-        place_pipeline_form.addRow("取得開始日 (From):", self.place_pipeline_from_edit)
+            # 日付範囲
+            self.place_pipeline_from_edit = QLineEdit()
+            self.place_pipeline_from_edit.setPlaceholderText("20200101 (空白 = 制限なし)")
+            place_pipeline_form.addRow("取得開始日 (From):", self.place_pipeline_from_edit)
 
-        self.place_pipeline_to_edit = QLineEdit()
-        self.place_pipeline_to_edit.setPlaceholderText("20231231 (空白 = 制限なし)")
-        place_pipeline_form.addRow("取得終了日 (To):", self.place_pipeline_to_edit)
+            self.place_pipeline_to_edit = QLineEdit()
+            self.place_pipeline_to_edit.setPlaceholderText("20231231 (空白 = 制限なし)")
+            place_pipeline_form.addRow("取得終了日 (To):", self.place_pipeline_to_edit)
 
-        # TopN
-        self.place_pipeline_topn_spin = QSpinBox()
-        self.place_pipeline_topn_spin.setRange(1, 200)
-        self.place_pipeline_topn_spin.setValue(3)
-        place_pipeline_form.addRow("上位 N 件 (TopN):", self.place_pipeline_topn_spin)
+            # TopN
+            self.place_pipeline_topn_spin = QSpinBox()
+            self.place_pipeline_topn_spin.setRange(1, 200)
+            self.place_pipeline_topn_spin.setValue(3)
+            place_pipeline_form.addRow("上位 N 件 (TopN):", self.place_pipeline_topn_spin)
 
-        # モデルパス
-        self.place_pipeline_model_edit = QLineEdit()
-        self.place_pipeline_model_edit.setPlaceholderText("models/place_lgbm.pkl")
-        place_pipeline_form.addRow("モデルパス:", self._with_browse(self.place_pipeline_model_edit, file=True))
+            # モデルパス
+            self.place_pipeline_model_edit = QLineEdit()
+            self.place_pipeline_model_edit.setPlaceholderText("models/place_lgbm.pkl")
+            place_pipeline_form.addRow("モデルパス:", self._with_browse(self.place_pipeline_model_edit, file=True))
 
-        # データ出力ディレクトリ
-        self.place_pipeline_datadir_edit = QLineEdit()
-        self.place_pipeline_datadir_edit.setPlaceholderText("data/")
-        place_pipeline_form.addRow("データ出力ディレクトリ:", self._with_browse(self.place_pipeline_datadir_edit, file=False))
+            # データ出力ディレクトリ
+            self.place_pipeline_datadir_edit = QLineEdit()
+            self.place_pipeline_datadir_edit.setPlaceholderText("data/")
+            place_pipeline_form.addRow("データ出力ディレクトリ:", self._with_browse(self.place_pipeline_datadir_edit, file=False))
 
-        place_pipeline_layout.addLayout(place_pipeline_form)
+            place_pipeline_layout.addLayout(place_pipeline_form)
 
-        # 実行ボタン
-        self.place_pipeline_btn = QPushButton("推奨生成 (一括実行)")
-        self.place_pipeline_btn.setMinimumHeight(36)
-        if _PLACE_PIPELINE_AVAILABLE:
-            self.place_pipeline_btn.clicked.connect(self._on_place_pipeline)
-        else:
-            self.place_pipeline_btn.setEnabled(False)
-            missing = [
-                s.name for s in [
-                    _PLACE_PIPELINE_BUILD_SCRIPT, _PLACE_PIPELINE_SPLIT_SCRIPT,
-                    _PLACE_PIPELINE_TRAIN_SCRIPT, _PLACE_PIPELINE_PREDICT_SCRIPT,
-                    _PLACE_PIPELINE_RECOMMEND_SCRIPT,
-                ] if not s.exists()
-            ]
-            self.place_pipeline_btn.setToolTip(
-                "未対応 (スクリプトが見つかりません: " + ", ".join(missing) + ")"
+            # 実行ボタン
+            self.place_pipeline_btn = QPushButton("推奨生成 (一括実行)")
+            self.place_pipeline_btn.setMinimumHeight(36)
+            if _PLACE_PIPELINE_AVAILABLE:
+                self.place_pipeline_btn.clicked.connect(self._on_place_pipeline)
+            else:
+                self.place_pipeline_btn.setEnabled(False)
+                missing = [
+                    s.name for s in [
+                        _PLACE_PIPELINE_BUILD_SCRIPT, _PLACE_PIPELINE_SPLIT_SCRIPT,
+                        _PLACE_PIPELINE_TRAIN_SCRIPT, _PLACE_PIPELINE_PREDICT_SCRIPT,
+                        _PLACE_PIPELINE_RECOMMEND_SCRIPT,
+                    ] if not s.exists()
+                ]
+                self.place_pipeline_btn.setToolTip(
+                    "未対応 (スクリプトが見つかりません: " + ", ".join(missing) + ")"
+                )
+            place_pipeline_layout.addWidget(self.place_pipeline_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+            # 推奨結果テーブル
+            place_pipeline_layout.addWidget(QLabel("複勝推奨結果:"))
+            self.place_reco_table = QTableWidget(0, len(_PLACE_RECO_TABLE_COLS))
+            self.place_reco_table.setHorizontalHeaderLabels(_PLACE_RECO_TABLE_COLS)
+            self.place_reco_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.place_reco_table.verticalHeader().setVisible(False)
+            self.place_reco_table.horizontalHeader().setSectionResizeMode(
+                _PLACE_RECO_TABLE_COLS.index("race_name_short"), QHeaderView.ResizeMode.Stretch
             )
-        place_pipeline_layout.addWidget(self.place_pipeline_btn, alignment=Qt.AlignmentFlag.AlignRight)
+            self.place_reco_table.horizontalHeader().setSectionResizeMode(
+                _PLACE_RECO_TABLE_COLS.index("horse_name"), QHeaderView.ResizeMode.Stretch
+            )
+            self.place_reco_table.setMinimumHeight(120)
+            place_pipeline_layout.addWidget(self.place_reco_table)
 
-        # 推奨結果テーブル
-        place_pipeline_layout.addWidget(QLabel("複勝推奨結果:"))
-        self.place_reco_table = QTableWidget(0, len(_PLACE_RECO_TABLE_COLS))
-        self.place_reco_table.setHorizontalHeaderLabels(_PLACE_RECO_TABLE_COLS)
-        self.place_reco_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.place_reco_table.verticalHeader().setVisible(False)
-        self.place_reco_table.horizontalHeader().setSectionResizeMode(
-            _PLACE_RECO_TABLE_COLS.index("race_name_short"), QHeaderView.ResizeMode.Stretch
-        )
-        self.place_reco_table.horizontalHeader().setSectionResizeMode(
-            _PLACE_RECO_TABLE_COLS.index("horse_name"), QHeaderView.ResizeMode.Stretch
-        )
-        self.place_reco_table.setMinimumHeight(120)
-        place_pipeline_layout.addWidget(self.place_reco_table)
-
-        self._place_pipeline_box.setContentLayout(place_pipeline_layout)
-        root_layout.addWidget(self._place_pipeline_box)
+            self._place_pipeline_box.setContentLayout(place_pipeline_layout)
+            root_layout.addWidget(self._place_pipeline_box)
 
         # ── ログ出力 ──────────────────────────────────
         self._log_box = CollapsibleBox("ログ")
@@ -978,13 +983,14 @@ class MainWindow(QMainWindow):
         self.combo_topn_spin.setValue(int(cfg.get("combo_topn", 10)))
 
         # 複勝パイプライン設定
-        self.place_pipeline_from_edit.setText(cfg.get("place_pipeline_from", ""))
-        self.place_pipeline_to_edit.setText(cfg.get("place_pipeline_to", ""))
-        self.place_pipeline_topn_spin.setValue(int(cfg.get("place_pipeline_topn", 3)))
-        place_pipeline_model = cfg.get("place_pipeline_model") or str(REPO_ROOT / "models" / "place_lgbm.pkl")
-        self.place_pipeline_model_edit.setText(place_pipeline_model)
-        place_pipeline_datadir = cfg.get("place_pipeline_datadir") or str(REPO_ROOT / "data")
-        self.place_pipeline_datadir_edit.setText(place_pipeline_datadir)
+        if _ENABLE_PLACE_PIPELINE_GUI:
+            self.place_pipeline_from_edit.setText(cfg.get("place_pipeline_from", ""))
+            self.place_pipeline_to_edit.setText(cfg.get("place_pipeline_to", ""))
+            self.place_pipeline_topn_spin.setValue(int(cfg.get("place_pipeline_topn", 3)))
+            place_pipeline_model = cfg.get("place_pipeline_model") or str(REPO_ROOT / "models" / "place_lgbm.pkl")
+            self.place_pipeline_model_edit.setText(place_pipeline_model)
+            place_pipeline_datadir = cfg.get("place_pipeline_datadir") or str(REPO_ROOT / "data")
+            self.place_pipeline_datadir_edit.setText(place_pipeline_datadir)
 
         # ウィンドウサイズ
         geom = cfg.get("window_geometry")
@@ -1002,7 +1008,8 @@ class MainWindow(QMainWindow):
         self._races_box.setCollapsed(collapsed.get("races", False))
         self._retrain_box.setCollapsed(collapsed.get("retrain", True))
         self._combo_box.setCollapsed(collapsed.get("combo", True))
-        self._place_pipeline_box.setCollapsed(collapsed.get("place_pipeline", True))
+        if _ENABLE_PLACE_PIPELINE_GUI:
+            self._place_pipeline_box.setCollapsed(collapsed.get("place_pipeline", True))
         self._log_box.setCollapsed(collapsed.get("log", True))
         self._results_box.setCollapsed(collapsed.get("results", True))
         self._manual_box.setCollapsed(collapsed.get("manual", True))
@@ -1010,7 +1017,7 @@ class MainWindow(QMainWindow):
     def _save_settings(self) -> None:
         geom = self.geometry()
         py32_cmd = display_to_py32(self.py32_edit.text())
-        save_config({
+        cfg = {
             "db_path": self.db_edit.text().strip(),
             "model_path": self.model_edit.text().strip(),
             "out_dir": self.outdir_edit.text().strip(),
@@ -1028,11 +1035,6 @@ class MainWindow(QMainWindow):
             "wide_predict_model": self.wide_model_edit.text().strip(),
             "sanrenpuku_predict_model": self.sanrenpuku_model_edit.text().strip(),
             "combo_topn": self.combo_topn_spin.value(),
-            "place_pipeline_from": self.place_pipeline_from_edit.text().strip(),
-            "place_pipeline_to": self.place_pipeline_to_edit.text().strip(),
-            "place_pipeline_topn": self.place_pipeline_topn_spin.value(),
-            "place_pipeline_model": self.place_pipeline_model_edit.text().strip(),
-            "place_pipeline_datadir": self.place_pipeline_datadir_edit.text().strip(),
             "window_geometry": {
                 "x": geom.x(),
                 "y": geom.y(),
@@ -1044,12 +1046,19 @@ class MainWindow(QMainWindow):
                 "races": self._races_box.isCollapsed(),
                 "retrain": self._retrain_box.isCollapsed(),
                 "combo": self._combo_box.isCollapsed(),
-                "place_pipeline": self._place_pipeline_box.isCollapsed(),
                 "log": self._log_box.isCollapsed(),
                 "results": self._results_box.isCollapsed(),
                 "manual": self._manual_box.isCollapsed(),
             },
-        })
+        }
+        if _ENABLE_PLACE_PIPELINE_GUI:
+            cfg["place_pipeline_from"] = self.place_pipeline_from_edit.text().strip()
+            cfg["place_pipeline_to"] = self.place_pipeline_to_edit.text().strip()
+            cfg["place_pipeline_topn"] = self.place_pipeline_topn_spin.value()
+            cfg["place_pipeline_model"] = self.place_pipeline_model_edit.text().strip()
+            cfg["place_pipeline_datadir"] = self.place_pipeline_datadir_edit.text().strip()
+            cfg["ui_collapsed"]["place_pipeline"] = self._place_pipeline_box.isCollapsed()
+        save_config(cfg)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._save_settings()
@@ -1604,7 +1613,8 @@ class MainWindow(QMainWindow):
         self.retrain_all_btn.setEnabled(not running and _PLACE_RETRAIN_AVAILABLE)
         self.predict_wide_btn.setEnabled(not running)
         self.predict_sanrenpuku_btn.setEnabled(not running)
-        self.place_pipeline_btn.setEnabled(not running and _PLACE_PIPELINE_AVAILABLE)
+        if _ENABLE_PLACE_PIPELINE_GUI:
+            self.place_pipeline_btn.setEnabled(not running and _PLACE_PIPELINE_AVAILABLE)
         self.cancel_btn.setEnabled(running)
 
     # ── Update (RACE) ─────────────────────────────────
@@ -2253,7 +2263,8 @@ class MainWindow(QMainWindow):
             recommendations_csv = str(Path(data_dir) / "place_recommendations_rich.csv")
             self._log(f"[複勝パイプライン] 推奨ファイル: {recommendations_csv}")
             self._display_place_recommendations(recommendations_csv)
-            self._place_pipeline_box.setCollapsed(False)
+            if _ENABLE_PLACE_PIPELINE_GUI:
+                self._place_pipeline_box.setCollapsed(False)
         else:
             self._log(
                 "[複勝パイプライン] キャンセルされました"
