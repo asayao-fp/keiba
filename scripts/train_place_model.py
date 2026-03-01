@@ -97,63 +97,104 @@ def parse_args():
     return parser.parse_args()
 
 
-def _get_date_series(df):
-    """データフレームから日付系列を取得する。
+def _get_race_dates(df):
+    """race_key ごとの日付マッピングを返す。
 
-    1. ``race_date`` 列を優先。
-    2. ``race_key`` の先頭 8 桁 (YYYYMMDD) を次に試みる。
+    1. ``race_key`` の先頭 8 桁 (YYYYMMDD) を優先。
+    2. ``yyyymmdd`` 列を次に試みる。
     3. いずれも失敗したら ``(None, None)`` を返す。
+
+    日付が取得できないレース (全行 NaT) は警告付きで除外する。
+    複数行あるレースは最小 (min) の非 null 日付を採用する。
 
     Returns
     -------
-    dates : pd.Series or None
-        各行に対応する ``pd.Timestamp`` の Series (解析失敗行は NaT)。
+    race_date_map : dict[str, pd.Timestamp] or None
+        race_key -> Timestamp マッピング。
     source : str or None
         使用した列名の説明文字列。
     """
-    if "race_date" in df.columns:
-        dates = pd.to_datetime(df["race_date"], errors="coerce")
-        if dates.notna().any():
-            return dates, "race_date"
+    if "race_key" not in df.columns:
+        return None, None
 
-    if "race_key" in df.columns:
-        dates = pd.to_datetime(df["race_key"].astype(str).str[:8], format="%Y%m%d", errors="coerce")
-        if dates.notna().any():
-            return dates, "race_key prefix"
+    race_keys = df["race_key"].astype(str)
 
-    return None, None
+    # Try race_key prefix (YYYYMMDD)
+    dates = pd.to_datetime(race_keys.str[:8], format="%Y%m%d", errors="coerce")
+    source = "race_key prefix"
+
+    if not dates.notna().any():
+        # Fall back to yyyymmdd column
+        if "yyyymmdd" not in df.columns:
+            return None, None
+        dates = pd.to_datetime(df["yyyymmdd"].astype(str), format="%Y%m%d", errors="coerce")
+        source = "yyyymmdd"
+        if not dates.notna().any():
+            return None, None
+
+    # Per-race date: min non-null date
+    race_date_series = (
+        pd.DataFrame({"race_key": race_keys, "date": dates})
+        .groupby("race_key")["date"]
+        .min()
+    )
+
+    # Drop races with no valid date
+    null_races = race_date_series[race_date_series.isna()]
+    if not null_races.empty:
+        print(f"[WARN] 日付が取得できないレースを除外します: {len(null_races)} 件")
+        race_date_series = race_date_series.dropna()
+
+    if race_date_series.empty:
+        return None, None
+
+    return race_date_series.to_dict(), source
 
 
-def _chrono_split_indices(df, date_series, val_ratio=0.2, val_from=None):
-    """時系列順の train/val インデックスを返す。
+def _chrono_split_indices(df, race_date_map, val_ratio=0.2, val_from=None):
+    """時系列順の train/val インデックスをレース単位で返す。
+
+    レース単位で分割することで train と val に同じ race_key が混在しない
+    ことを保証する。
 
     Parameters
     ----------
     df : pd.DataFrame
-    date_series : pd.Series
-        各行に対応する日付 (``pd.Timestamp``)。
+    race_date_map : dict[str, pd.Timestamp]
+        race_key -> Timestamp マッピング。
     val_ratio : float
-        ``val_from`` 未指定時に val セットとする末尾の割合。
+        ``val_from`` 未指定時に val セットとする末尾のレース割合。
     val_from : str or None
-        ``"YYYYMMDD"`` 形式の文字列。指定時はこの日以降を val とする。
+        ``"YYYYMMDD"`` 形式の文字列。指定時はこの日以降のレースを val とする。
 
     Returns
     -------
     train_idx, val_idx : pd.Index
     cutoff_date : pd.Timestamp
+    train_race_keys : set
+    val_race_keys : set
     """
+    sorted_races = sorted(race_date_map.items(), key=lambda x: x[1])
+    sorted_race_keys = [rk for rk, _ in sorted_races]
+    sorted_dates = [d for _, d in sorted_races]
+
     if val_from is not None:
         cutoff_date = pd.to_datetime(val_from, format="%Y%m%d")
+        val_race_keys = {rk for rk, d in sorted_races if d >= cutoff_date}
     else:
-        sorted_dates = date_series.sort_values().dropna()
-        cutoff_pos = int(len(sorted_dates) * (1 - val_ratio))
+        n_races = len(sorted_race_keys)
+        cutoff_pos = int(n_races * (1 - val_ratio))
         # cutoff_pos が境界を超えないようにクリップ
-        cutoff_pos = max(0, min(cutoff_pos, len(sorted_dates) - 1))
-        cutoff_date = sorted_dates.iloc[cutoff_pos]
+        cutoff_pos = max(0, min(cutoff_pos, n_races - 1))
+        cutoff_date = sorted_dates[cutoff_pos]
+        val_race_keys = set(sorted_race_keys[cutoff_pos:])
 
-    train_idx = df.index[date_series < cutoff_date]
-    val_idx = df.index[date_series >= cutoff_date]
-    return train_idx, val_idx, cutoff_date
+    train_race_keys = set(race_date_map.keys()) - val_race_keys
+
+    race_key_series = df["race_key"].astype(str)
+    train_idx = df.index[race_key_series.isin(train_race_keys)]
+    val_idx = df.index[race_key_series.isin(val_race_keys)]
+    return train_idx, val_idx, cutoff_date, train_race_keys, val_race_keys
 
 
 def compute_topk_metrics(race_keys, y_true, y_proba, k=3):
@@ -243,17 +284,17 @@ def main():
     train_idx = val_idx = None
 
     if split_method == "chrono":
-        date_series, date_source = _get_date_series(df)
-        if date_series is None:
+        race_date_map, date_source = _get_race_dates(df)
+        if race_date_map is None:
             print(
-                "[WARN] race_date / race_key 列が見つからないか日付解析に失敗しました。"
+                "[WARN] race_key / yyyymmdd 列が見つからないか日付解析に失敗しました。"
                 " ランダム分割にフォールバックします。"
             )
             split_method = "random"
         else:
             try:
-                train_idx, val_idx, cutoff_date = _chrono_split_indices(
-                    df, date_series, val_ratio=val_ratio, val_from=val_from
+                train_idx, val_idx, cutoff_date, train_race_keys, val_race_keys = _chrono_split_indices(
+                    df, race_date_map, val_ratio=val_ratio, val_from=val_from
                 )
                 if len(train_idx) == 0 or len(val_idx) == 0:
                     print(
@@ -267,22 +308,22 @@ def main():
                         print(f"[INFO] 分割方法: chrono (source={date_source}, val_from={val_from})")
                     else:
                         print(f"[INFO] 分割方法: chrono (source={date_source}, val_ratio={val_ratio})")
-                    train_dates = date_series[train_idx].dropna()
-                    val_dates = date_series[val_idx].dropna()
-                    if not train_dates.empty:
+                    train_dates = [race_date_map[rk] for rk in train_race_keys]
+                    val_dates = [race_date_map[rk] for rk in val_race_keys]
+                    if train_dates:
                         print(
-                            f"[INFO] train 日付範囲: {train_dates.min().date()} ~ {train_dates.max().date()}"
-                            f"  ({len(train_idx)} 件)"
+                            f"[INFO] train 日付範囲: {min(train_dates).date()} ~ {max(train_dates).date()}"
+                            f"  ({len(train_idx)} 件, {len(train_race_keys)} レース)"
                         )
                     else:
-                        print(f"[INFO] train 日付範囲: (不明)  ({len(train_idx)} 件)")
-                    if not val_dates.empty:
+                        print(f"[INFO] train 日付範囲: (不明)  ({len(train_idx)} 件, {len(train_race_keys)} レース)")
+                    if val_dates:
                         print(
-                            f"[INFO] val   日付範囲: {val_dates.min().date()} ~ {val_dates.max().date()}"
-                            f"  ({len(val_idx)} 件)"
+                            f"[INFO] val   日付範囲: {min(val_dates).date()} ~ {max(val_dates).date()}"
+                            f"  ({len(val_idx)} 件, {len(val_race_keys)} レース)"
                         )
                     else:
-                        print(f"[INFO] val   日付範囲: (不明)  ({len(val_idx)} 件)")
+                        print(f"[INFO] val   日付範囲: (不明)  ({len(val_idx)} 件, {len(val_race_keys)} レース)")
             except Exception as exc:
                 print(f"[WARN] 時系列分割中にエラーが発生しました ({exc})。ランダム分割にフォールバックします。")
                 split_method = "random"
