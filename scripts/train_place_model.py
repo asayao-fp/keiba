@@ -75,7 +75,85 @@ def parse_args():
         metavar="K",
         help="Top-K for precision@k / hit_rate@k (デフォルト: 3)",
     )
+    parser.add_argument(
+        "--split",
+        choices=["chrono", "random"],
+        default="chrono",
+        help="train/val 分割方法: chrono=時系列順, random=ランダム (デフォルト: chrono)",
+    )
+    parser.add_argument(
+        "--val-ratio",
+        type=float,
+        default=0.2,
+        metavar="RATIO",
+        help="val セットの割合 (デフォルト: 0.2)。--val-from 指定時は無視される",
+    )
+    parser.add_argument(
+        "--val-from",
+        default=None,
+        metavar="YYYYMMDD",
+        help="val セット開始日 (例: 20230101)。指定時は --val-ratio を無視して日付でカット",
+    )
     return parser.parse_args()
+
+
+def _get_date_series(df):
+    """データフレームから日付系列を取得する。
+
+    1. ``race_date`` 列を優先。
+    2. ``race_key`` の先頭 8 桁 (YYYYMMDD) を次に試みる。
+    3. いずれも失敗したら ``(None, None)`` を返す。
+
+    Returns
+    -------
+    dates : pd.Series or None
+        各行に対応する ``pd.Timestamp`` の Series (解析失敗行は NaT)。
+    source : str or None
+        使用した列名の説明文字列。
+    """
+    if "race_date" in df.columns:
+        dates = pd.to_datetime(df["race_date"], errors="coerce")
+        if dates.notna().any():
+            return dates, "race_date"
+
+    if "race_key" in df.columns:
+        dates = pd.to_datetime(df["race_key"].astype(str).str[:8], format="%Y%m%d", errors="coerce")
+        if dates.notna().any():
+            return dates, "race_key prefix"
+
+    return None, None
+
+
+def _chrono_split_indices(df, date_series, val_ratio=0.2, val_from=None):
+    """時系列順の train/val インデックスを返す。
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+    date_series : pd.Series
+        各行に対応する日付 (``pd.Timestamp``)。
+    val_ratio : float
+        ``val_from`` 未指定時に val セットとする末尾の割合。
+    val_from : str or None
+        ``"YYYYMMDD"`` 形式の文字列。指定時はこの日以降を val とする。
+
+    Returns
+    -------
+    train_idx, val_idx : pd.Index
+    cutoff_date : pd.Timestamp
+    """
+    if val_from is not None:
+        cutoff_date = pd.to_datetime(val_from, format="%Y%m%d")
+    else:
+        sorted_dates = date_series.sort_values().dropna()
+        cutoff_pos = int(len(sorted_dates) * (1 - val_ratio))
+        # cutoff_pos が境界を超えないようにクリップ
+        cutoff_pos = max(0, min(cutoff_pos, len(sorted_dates) - 1))
+        cutoff_date = sorted_dates.iloc[cutoff_pos]
+
+    train_idx = df.index[date_series < cutoff_date]
+    val_idx = df.index[date_series >= cutoff_date]
+    return train_idx, val_idx, cutoff_date
 
 
 def compute_topk_metrics(race_keys, y_true, y_proba, k=3):
@@ -157,9 +235,77 @@ def main():
     for col in CATEGORICAL_FEATURES:
         X[col] = X[col].fillna("")
 
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
+    # --- train/val 分割 ---
+    split_method = args.split
+    val_ratio = args.val_ratio
+    val_from = args.val_from
+
+    train_idx = val_idx = None
+
+    if split_method == "chrono":
+        date_series, date_source = _get_date_series(df)
+        if date_series is None:
+            print(
+                "[WARN] race_date / race_key 列が見つからないか日付解析に失敗しました。"
+                " ランダム分割にフォールバックします。"
+            )
+            split_method = "random"
+        else:
+            try:
+                train_idx, val_idx, cutoff_date = _chrono_split_indices(
+                    df, date_series, val_ratio=val_ratio, val_from=val_from
+                )
+                if len(train_idx) == 0 or len(val_idx) == 0:
+                    print(
+                        "[WARN] 時系列分割の結果 train または val が空になりました。"
+                        " ランダム分割にフォールバックします。"
+                    )
+                    split_method = "random"
+                    train_idx = val_idx = None
+                else:
+                    if val_from:
+                        print(f"[INFO] 分割方法: chrono (source={date_source}, val_from={val_from})")
+                    else:
+                        print(f"[INFO] 分割方法: chrono (source={date_source}, val_ratio={val_ratio})")
+                    train_dates = date_series[train_idx].dropna()
+                    val_dates = date_series[val_idx].dropna()
+                    if not train_dates.empty:
+                        print(
+                            f"[INFO] train 日付範囲: {train_dates.min().date()} ~ {train_dates.max().date()}"
+                            f"  ({len(train_idx)} 件)"
+                        )
+                    else:
+                        print(f"[INFO] train 日付範囲: (不明)  ({len(train_idx)} 件)")
+                    if not val_dates.empty:
+                        print(
+                            f"[INFO] val   日付範囲: {val_dates.min().date()} ~ {val_dates.max().date()}"
+                            f"  ({len(val_idx)} 件)"
+                        )
+                    else:
+                        print(f"[INFO] val   日付範囲: (不明)  ({len(val_idx)} 件)")
+            except Exception as exc:
+                print(f"[WARN] 時系列分割中にエラーが発生しました ({exc})。ランダム分割にフォールバックします。")
+                split_method = "random"
+                train_idx = val_idx = None
+
+    if split_method == "random":
+        print(f"[INFO] 分割方法: random (val_ratio={val_ratio})")
+        try:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y, test_size=val_ratio, random_state=42, stratify=y
+            )
+        except ValueError:
+            # クラス数が少ない場合など stratify に失敗したときは stratify なしで分割
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y, test_size=val_ratio, random_state=42
+            )
+    else:
+        X_train = X.loc[train_idx]
+        X_val = X.loc[val_idx]
+        y_train = y.loc[train_idx]
+        y_val = y.loc[val_idx]
+
+    print(f"[INFO] train={len(X_train)}, val={len(X_val)}")
 
     # race_key は特徴量に含まれないが TopK 指標の計算に使う
     has_race_key = "race_key" in df.columns
