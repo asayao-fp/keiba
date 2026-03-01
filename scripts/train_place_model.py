@@ -210,6 +210,18 @@ def compute_topk_metrics(race_keys, y_true, y_proba, k=3):
     precision_at_k : float
     hit_rate_at_k  : float
     n_races        : int
+    mean_hits_at_k : float
+        各レースで上位 k 頭のうち is_place=1 の頭数の平均 (0..k)。
+    p1_mean : float
+        上位1位馬の予測確率の平均。
+    p2_mean : float
+        上位2位馬の予測確率の平均 (2頭未満のレースは除外)。
+    p3_mean : float
+        上位3位馬の予測確率の平均 (3頭未満のレースは除外)。
+    p1_minus_p2_mean : float
+        (p1 - p2) の平均 (2頭未満のレースは除外)。
+    p3_minus_p4_mean : float or None
+        k>=4 のとき (p3 - p4) の平均 (4頭未満のレースは除外)。それ以外は None。
     """
     val_df = pd.DataFrame(
         {
@@ -222,26 +234,68 @@ def compute_topk_metrics(race_keys, y_true, y_proba, k=3):
     precision_at_1_list = []
     precision_at_k_list = []
     hit_rate_at_k_list = []
+    mean_hits_at_k_list = []
+    p1_list = []
+    p2_list = []
+    p3_list = []
+    p4_list = []
+    p1_minus_p2_list = []
+    p3_minus_p4_list = []
 
     for _, grp in val_df.groupby("race_key"):
         grp_sorted = grp.sort_values("p_place", ascending=False)
+        n = len(grp_sorted)
+        probs = grp_sorted["p_place"].values
 
         top1 = grp_sorted.iloc[:1]
         precision_at_1_list.append(float(top1["is_place"].mean()))
 
-        actual_k = min(k, len(grp_sorted))
+        actual_k = min(k, n)
         topk = grp_sorted.iloc[:actual_k]
         precision_at_k_list.append(float(topk["is_place"].mean()))
         hit_rate_at_k_list.append(int(topk["is_place"].sum() > 0))
+        mean_hits_at_k_list.append(float(topk["is_place"].sum()))
+
+        p1_list.append(probs[0])
+        if n >= 2:
+            p2_list.append(probs[1])
+            p1_minus_p2_list.append(probs[0] - probs[1])
+        if n >= 3:
+            p3_list.append(probs[2])
+        if n >= 4:
+            p4_list.append(probs[3])
+            p3_minus_p4_list.append(probs[2] - probs[3])
 
     n_races = len(precision_at_1_list)
     if n_races == 0:
-        return float("nan"), float("nan"), float("nan"), 0
+        nan = float("nan")
+        return nan, nan, nan, 0, nan, nan, nan, nan, nan, None
 
-    precision_at_1 = sum(precision_at_1_list) / n_races
-    precision_at_k = sum(precision_at_k_list) / n_races
-    hit_rate_at_k = sum(hit_rate_at_k_list) / n_races
-    return precision_at_1, precision_at_k, hit_rate_at_k, n_races
+    def _mean(lst):
+        return sum(lst) / len(lst) if lst else float("nan")
+
+    precision_at_1 = _mean(precision_at_1_list)
+    precision_at_k = _mean(precision_at_k_list)
+    hit_rate_at_k = _mean(hit_rate_at_k_list)
+    mean_hits_at_k = _mean(mean_hits_at_k_list)
+    p1_mean = _mean(p1_list)
+    p2_mean = _mean(p2_list)
+    p3_mean = _mean(p3_list)
+    p1_minus_p2_mean = _mean(p1_minus_p2_list)
+    p3_minus_p4_mean = _mean(p3_minus_p4_list) if k >= 4 else None
+
+    return (
+        precision_at_1,
+        precision_at_k,
+        hit_rate_at_k,
+        n_races,
+        mean_hits_at_k,
+        p1_mean,
+        p2_mean,
+        p3_mean,
+        p1_minus_p2_mean,
+        p3_minus_p4_mean,
+    )
 
 
 def main():
@@ -392,11 +446,22 @@ def main():
     else:
         race_keys_val = df.loc[X_val.index, "race_key"]
         k = args.topk
-        p1, pk, hr, n_races = compute_topk_metrics(race_keys_val, y_val, y_pred_proba, k=k)
+        (
+            p1, pk, hr, n_races,
+            mean_hits_at_k,
+            p1_mean, p2_mean, p3_mean,
+            p1_minus_p2_mean,
+            p3_minus_p4_mean,
+        ) = compute_topk_metrics(race_keys_val, y_val, y_pred_proba, k=k)
         print(f"[INFO] Val races: {n_races}")
         print(f"[INFO] Precision@1: {p1:.4f}")
         print(f"[INFO] Precision@{k}: {pk:.4f}")
         print(f"[INFO] HitRate@{k}: {hr:.4f}")
+        print(f"[INFO] MeanHits@{k}: {mean_hits_at_k:.4f}")
+        print(f"[INFO] p1_mean: {p1_mean:.4f}  p2_mean: {p2_mean:.4f}  p3_mean: {p3_mean:.4f}")
+        print(f"[INFO] p1_minus_p2_mean: {p1_minus_p2_mean:.4f}")
+        if p3_minus_p4_mean is not None:
+            print(f"[INFO] p3_minus_p4_mean: {p3_minus_p4_mean:.4f}")
 
     out_dir = os.path.dirname(args.model_out)
     if out_dir:
