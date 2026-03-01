@@ -6,6 +6,7 @@ SQLite DB から学習データ CSV を生成する。
 使用例:
   python scripts/build_place_training_data.py --db jv_data.db --out data/place_train.csv
   python scripts/build_place_training_data.py --db jv_data.db --out data/place_train.csv --from 20200101 --to 20231231
+  python scripts/build_place_training_data.py --db jv_data.db --out data/place_infer.csv --include-unlabeled
 """
 
 import argparse
@@ -43,6 +44,9 @@ COLUMNS = [
     "is_place",
 ]
 
+IS_PLACE_IDX = COLUMNS.index("is_place")
+
+
 PASSING_FEATURE_COLS = [
     "avg_pos_1c_last3",
     "avg_pos_4c_last3",
@@ -54,7 +58,12 @@ PASSING_FEATURE_COLS = [
 ]
 
 
-def fetch_training_rows(conn: sqlite3.Connection, date_from: str | None, date_to: str | None) -> list:
+def fetch_training_rows(
+    conn: sqlite3.Connection,
+    date_from: str | None,
+    date_to: str | None,
+    include_unlabeled: bool = False,
+) -> list:
     params = []
     date_filter = ""
     if date_from:
@@ -63,6 +72,9 @@ def fetch_training_rows(conn: sqlite3.Connection, date_from: str | None, date_to
     if date_to:
         date_filter += " AND r.yyyymmdd <= ?"
         params.append(date_to)
+
+    # When include_unlabeled is True, omit the filter so NULL rows are included.
+    is_place_filter = "" if include_unlabeled else "AND e.is_place IS NOT NULL"
 
     query_with_passing = f"""
         SELECT
@@ -91,9 +103,9 @@ def fetch_training_rows(conn: sqlite3.Connection, date_from: str | None, date_to
         FROM entries e
         JOIN races r ON r.race_key = e.race_key
         LEFT JOIN horse_past_passing_features p ON p.race_key = e.race_key AND p.horse_id = e.horse_id
-        WHERE e.is_place IS NOT NULL
-          AND e.body_weight IS NOT NULL
+        WHERE e.body_weight IS NOT NULL
           AND e.handicap_weight_x10 IS NOT NULL
+          {is_place_filter}
           {date_filter}
         ORDER BY r.yyyymmdd, e.race_key, CAST(e.horse_no AS INTEGER)
     """
@@ -124,9 +136,9 @@ def fetch_training_rows(conn: sqlite3.Connection, date_from: str | None, date_to
             e.is_place
         FROM entries e
         JOIN races r ON r.race_key = e.race_key
-        WHERE e.is_place IS NOT NULL
-          AND e.body_weight IS NOT NULL
+        WHERE e.body_weight IS NOT NULL
           AND e.handicap_weight_x10 IS NOT NULL
+          {is_place_filter}
           {date_filter}
         ORDER BY r.yyyymmdd, e.race_key, CAST(e.horse_no AS INTEGER)
     """
@@ -172,6 +184,13 @@ def parse_args():
         metavar="YYYYMMDD",
         help="取得終了日 (例: 20231231)",
     )
+    parser.add_argument(
+        "--include-unlabeled",
+        dest="include_unlabeled",
+        action="store_true",
+        default=False,
+        help="is_place が NULL の未ラベル行も出力に含める (デフォルト: False)",
+    )
     return parser.parse_args()
 
 
@@ -185,7 +204,7 @@ def main():
         sys.exit(1)
 
     try:
-        rows = fetch_training_rows(conn, args.date_from, args.date_to)
+        rows = fetch_training_rows(conn, args.date_from, args.date_to, args.include_unlabeled)
     except sqlite3.OperationalError as e:
         print(f"[ERROR] クエリ失敗: {e}", file=sys.stderr)
         sys.exit(1)
@@ -205,6 +224,10 @@ def main():
         writer.writerows(rows)
 
     print(f"[INFO] {len(rows)} 件 → {args.out}")
+    if args.include_unlabeled:
+        labeled = sum(1 for r in rows if r[IS_PLACE_IDX] is not None)
+        unlabeled = len(rows) - labeled
+        print(f"[INFO]   ラベル済み: {labeled} 件 / 未ラベル: {unlabeled} 件")
 
 
 if __name__ == "__main__":
